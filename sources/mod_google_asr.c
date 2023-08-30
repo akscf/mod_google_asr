@@ -33,14 +33,15 @@ static void *SWITCH_THREAD_FUNC transcript_thread(switch_thread_t *thread, void 
     const void *ptr = NULL;
     void *pop = NULL;
 
-    if(switch_buffer_create_dynamic(&curl_recv_buffer, 1024, 4096, 16384) != SWITCH_STATUS_SUCCESS) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_buffer_create_dynamic() fail\n");
-        goto out;
-    }
 
     switch_mutex_lock(asr_ctx->mutex);
     asr_ctx->deps++;
     switch_mutex_unlock(asr_ctx->mutex);
+
+    if(switch_buffer_create_dynamic(&curl_recv_buffer, 1024, 4096, 16384) != SWITCH_STATUS_SUCCESS) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_buffer_create_dynamic() fail\n");
+        goto out;
+    }
 
     while(true) {
         if(globals.fl_shutdown || asr_ctx->fl_destroyed ) {
