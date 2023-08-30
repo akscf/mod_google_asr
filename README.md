@@ -1,6 +1,6 @@
 <p>
   Freeswitch ASR module for the Google cloud Speech-to-Text service, based on v1-rest api with VAD. <br>
-  P.S.: Might troubles (crashes on http requests) under Ubuntu 22.04.2 LTS, seems it depends on some system libs...(the reasons are still being investigated...)
+  *** Might have some troubles (crahes) under Freeswitch-1.10.9-release..
 </p>
 
 ### Usage example
