@@ -410,7 +410,6 @@ static switch_status_t asr_get_results(switch_asr_handle_t *ah, char **xmlstr, s
 
     *xmlstr = result;
     return (result ? SWITCH_STATUS_SUCCESS : SWITCH_STATUS_FALSE);
-    return SWITCH_STATUS_FALSE;
 }
 
 static switch_status_t asr_start_input_timers(switch_asr_handle_t *ah) {
