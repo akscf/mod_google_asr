@@ -124,6 +124,18 @@ void xdata_buffer_queue_clean(switch_queue_t *queue) {
     }
 }
 
+switch_status_t xdata_buffer_push(switch_queue_t *queue, switch_byte_t *data, uint32_t data_len) {
+    xdata_buffer_t *buff = NULL;
+
+    if(xdata_buffer_alloc(&buff, data, data_len) == SWITCH_STATUS_SUCCESS) {
+        if(switch_queue_trypush(queue, buff) == SWITCH_STATUS_SUCCESS) {
+            return SWITCH_STATUS_SUCCESS;
+        }
+        xdata_buffer_free(buff);
+    }
+    return SWITCH_STATUS_FALSE;
+}
+
 char *audio_file_write(switch_byte_t *buf, uint32_t buf_len, uint32_t channels, uint32_t samplerate) {
     switch_status_t status = SWITCH_STATUS_FALSE;
     switch_size_t len = buf_len;

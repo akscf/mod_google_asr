@@ -26,18 +26,14 @@
 #define VERSION             "1.0 (gcp-asr-api-v1_http)"
 #define QUEUE_SIZE          64
 #define VAD_STORE_FRAMES    32
-#define VAD_RECOVER_FRAMES  10
+#define VAD_RECOVERY_FRAMES 10
 #define DEF_CHUNK_SZ_SEC    15
 #define BASE64_ENC_SZ(n)    (4*(n/3))
 #define BOOL2STR(v)         (v ? "true" : "false")
 
-
-
 //#define CURL_CRASHBUG_DBG   1
 
-
 typedef struct {
-    switch_memory_pool_t    *pool;
     switch_mutex_t          *mutex;
     uint32_t                active_threads;
     uint32_t                chunk_size_sec;
@@ -71,8 +67,7 @@ typedef struct {
 typedef struct {
     switch_memory_pool_t    *pool;
     switch_vad_t            *vad;
-    switch_byte_t           *vad_buf;
-    switch_byte_t           *chunk_buf;
+    switch_byte_t           *vad_buffer;
     switch_mutex_t          *mutex;
     switch_queue_t          *q_audio;
     switch_queue_t          *q_text;
@@ -82,9 +77,9 @@ typedef struct {
     switch_vad_state_t      vad_state;
     uint32_t                curl_send_buffer_len;
     int32_t                 transcript_results;
-    int32_t                 vad_buf_ofs;
-    uint32_t                vad_buf_size;
-    uint32_t                chunk_buf_size;
+    int32_t                 vad_buffer_ofs;
+    uint32_t                vad_buffer_size;
+    uint32_t                chunk_buffer_size;
     uint32_t                deps;
     uint32_t                samplerate;
     uint32_t                channels;
@@ -121,6 +116,7 @@ typedef struct {
 /* utils.c */
 void thread_finished();
 void thread_launch(switch_memory_pool_t *pool, switch_thread_start_t fun, void *data);
+switch_status_t xdata_buffer_push(switch_queue_t *queue, switch_byte_t *data, uint32_t data_len);
 switch_status_t xdata_buffer_alloc(xdata_buffer_t **out, switch_byte_t *data, uint32_t data_len);
 void xdata_buffer_free(xdata_buffer_t *buf);
 void xdata_buffer_queue_clean(switch_queue_t *queue);

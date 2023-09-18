@@ -76,7 +76,7 @@ switch_status_t curl_perform(gasr_ctx_t *asr_ctx) {
     if(asr_ctx->curl_recv_buffer_ref) {
         switch_buffer_write(asr_ctx->curl_recv_buffer_ref, "\0", 1);
     }
-out:
+
     if(chnd)    { switch_curl_easy_cleanup(chnd); }
     if(headers) { switch_curl_slist_free_all(headers); }
 
