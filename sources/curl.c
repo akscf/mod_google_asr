@@ -36,9 +36,8 @@ switch_status_t curl_perform(gasr_ctx_t *asr_ctx) {
     switch_status_t status = SWITCH_STATUS_SUCCESS;
     CURL *chnd = NULL;
     switch_curl_slist_t *headers = NULL;
-    switch_CURLcode http_resp = 0;
+    long http_resp = 0;
 
-#ifndef CURL_CRASHBUG_DBG
     chnd = switch_curl_easy_init();
     headers = switch_curl_slist_append(headers, "Content-Type: application/json; charset=utf-8");
 
@@ -69,7 +68,7 @@ switch_status_t curl_perform(gasr_ctx_t *asr_ctx) {
     switch_curl_easy_getinfo(chnd, CURLINFO_RESPONSE_CODE, &http_resp);
 
     if(http_resp != 200) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "http-error=[%d] (%s)\n", http_resp, globals.api_url);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "http-error=[%ld] (%s)\n", http_resp, globals.api_url);
         status = SWITCH_STATUS_FALSE;
     }
 
@@ -77,16 +76,8 @@ switch_status_t curl_perform(gasr_ctx_t *asr_ctx) {
         switch_buffer_write(asr_ctx->curl_recv_buffer_ref, "\0", 1);
     }
 
-    if(chnd)    { switch_curl_easy_cleanup(chnd); }
     if(headers) { switch_curl_slist_free_all(headers); }
-
-#else
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Emulate GCP response\n");
-
-    const char  *resp ="{ \"results\": [ { \"alternatives\": [ { \"transcript\": \"how old is the Brooklyn Bridge\", \"confidence\": 0.98267895 } ] } ] }";
-    switch_buffer_write(asr_ctx->curl_recv_buffer_ref, resp, strlen(resp));
-    switch_buffer_write(asr_ctx->curl_recv_buffer_ref, '\0', 1);
-#endif
+    if(chnd)    { switch_curl_easy_cleanup(chnd); }
 
     return status;
 }

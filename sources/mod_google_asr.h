@@ -31,8 +31,6 @@
 #define BASE64_ENC_SZ(n)    (4*(n/3))
 #define BOOL2STR(v)         (v ? "true" : "false")
 
-//#define CURL_CRASHBUG_DBG   1
-
 typedef struct {
     switch_mutex_t          *mutex;
     uint32_t                active_threads;

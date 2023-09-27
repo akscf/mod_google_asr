@@ -333,6 +333,7 @@ static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned in
             asr_ctx->vad_buffer_size = 0; // force disable
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "mem fail (vad_buffer)\n");
         }
+
     }
 
     if(asr_ctx->fl_vad_enabled) {
