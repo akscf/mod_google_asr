@@ -38,7 +38,9 @@ typedef struct {
     uint32_t                vad_silence_ms;
     uint32_t                vad_voice_ms;
     uint32_t                vad_threshold;
-    uint32_t                request_timeout;
+    uint32_t                request_timeout; // seconds
+    uint32_t                connect_timeout; // seconds
+    uint8_t                 fl_vad_debug;
     uint8_t                 fl_vad_enabled;
     uint8_t                 fl_shutdown;
     char                    *api_url_ep;
@@ -46,6 +48,8 @@ typedef struct {
     const char              *api_url;
     const char              *user_agent;
     const char              *default_lang;
+    const char              *proxy;
+    const char              *proxy_credentials;
     const char              *opt_encoding;
     const char              *opt_speech_model;
     const char              *opt_meta_microphone_distance;
@@ -75,8 +79,9 @@ typedef struct {
     switch_vad_state_t      vad_state;
     uint32_t                curl_send_buffer_len;
     int32_t                 transcript_results;
-    int32_t                 vad_buffer_ofs;
+    int32_t                 vad_buffer_offs;
     uint32_t                vad_buffer_size;
+    uint32_t                vad_stored_frames;
     uint32_t                chunk_buffer_size;
     uint32_t                deps;
     uint32_t                samplerate;
