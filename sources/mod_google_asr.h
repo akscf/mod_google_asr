@@ -121,7 +121,7 @@ void thread_finished();
 void thread_launch(switch_memory_pool_t *pool, switch_thread_start_t fun, void *data);
 switch_status_t xdata_buffer_push(switch_queue_t *queue, switch_byte_t *data, uint32_t data_len);
 switch_status_t xdata_buffer_alloc(xdata_buffer_t **out, switch_byte_t *data, uint32_t data_len);
-void xdata_buffer_free(xdata_buffer_t *buf);
+void xdata_buffer_free(xdata_buffer_t **buf);
 void xdata_buffer_queue_clean(switch_queue_t *queue);
 
 char *audio_file_write(switch_byte_t *buf, uint32_t buf_len, uint32_t channels, uint32_t samplerate);
