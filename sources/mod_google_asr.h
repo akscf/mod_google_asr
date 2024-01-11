@@ -69,7 +69,7 @@ typedef struct {
 typedef struct {
     switch_memory_pool_t    *pool;
     switch_vad_t            *vad;
-    switch_byte_t           *vad_buffer;
+    switch_buffer_t         *vad_buffer;
     switch_mutex_t          *mutex;
     switch_queue_t          *q_audio;
     switch_queue_t          *q_text;
@@ -79,7 +79,6 @@ typedef struct {
     switch_vad_state_t      vad_state;
     uint32_t                curl_send_buffer_len;
     int32_t                 transcript_results;
-    int32_t                 vad_buffer_offs;
     uint32_t                vad_buffer_size;
     uint32_t                vad_stored_frames;
     uint32_t                chunk_buffer_size;
@@ -90,6 +89,7 @@ typedef struct {
     uint32_t                ptime;
     uint8_t                 fl_pause;
     uint8_t                 fl_vad_enabled;
+    uint8_t                 fl_vad_first_cycle;
     uint8_t                 fl_destroyed;
     uint8_t                 fl_abort;
     //
