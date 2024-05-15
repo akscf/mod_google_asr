@@ -27,7 +27,7 @@
 #define VAD_STORE_FRAMES    32
 #define VAD_RECOVERY_FRAMES 10
 #define DEF_CHUNK_SZ_SEC    15
-#define BASE64_ENC_SZ(n)    (4*(n/3))
+#define BASE64_ENC_SZ(n)    (4*((n+2)/3))
 #define BOOL2STR(v)         (v ? "true" : "false")
 
 typedef struct {
