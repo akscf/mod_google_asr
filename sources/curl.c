@@ -1,10 +1,25 @@
-/**
- * (C)2023 aks
- * https://github.com/akscf/
- **/
+/*
+ * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
+ * Copyright (C) 2005-2014, Anthony Minessale II <anthm@freeswitch.org>
+ *
+ * Version: MPL 1.1
+ *
+ * The contents of this file are subject to the Mozilla Public License Version
+ * 1.1 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ * http://www.mozilla.org/MPL/
+ *
+ * Software distributed under the License is distributed on an "AS IS" basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
+ * License.
+ *
+ * Module Contributor(s):
+ *  Konstantin Alexandrin <akscfx@gmail.com>
+ *
+ *
+ */
 #include "mod_google_asr.h"
-
-extern globals_t globals;
 
 static size_t curl_io_write_callback(char *buffer, size_t size, size_t nitems, void *user_data) {
     gasr_ctx_t *asr_ctx = (gasr_ctx_t *)user_data;
@@ -31,7 +46,7 @@ static size_t curl_io_read_callback(char *buffer, size_t size, size_t nitems, vo
     return ncur;
 }
 
-switch_status_t curl_perform(gasr_ctx_t *asr_ctx) {
+switch_status_t curl_perform(gasr_ctx_t *asr_ctx, globals_t *globals) {
     switch_status_t status = SWITCH_STATUS_SUCCESS;
     CURL *curl_handle = NULL;
     switch_curl_slist_t *headers = NULL;
@@ -45,35 +60,35 @@ switch_status_t curl_perform(gasr_ctx_t *asr_ctx) {
     switch_curl_easy_setopt(curl_handle, CURLOPT_POST, 1);
     switch_curl_easy_setopt(curl_handle, CURLOPT_NOSIGNAL, 1);
     switch_curl_easy_setopt(curl_handle, CURLOPT_READFUNCTION, curl_io_read_callback);
-    switch_curl_easy_setopt(curl_handle, CURLOPT_READDATA, (void *) asr_ctx);
+    switch_curl_easy_setopt(curl_handle, CURLOPT_READDATA, (void *)asr_ctx);
     switch_curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, curl_io_write_callback);
-    switch_curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *) asr_ctx);
+    switch_curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)asr_ctx);
 
-    if(globals.connect_timeout > 0) {
-        switch_curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, globals.connect_timeout);
+    if(globals->connect_timeout > 0) {
+        switch_curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, globals->connect_timeout);
     }
-    if(globals.request_timeout > 0) {
-        switch_curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, globals.request_timeout);
+    if(globals->request_timeout > 0) {
+        switch_curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, globals->request_timeout);
     }
-    if(globals.user_agent) {
-        switch_curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, globals.user_agent);
+    if(globals->user_agent) {
+        switch_curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, globals->user_agent);
     }
-    if(strncasecmp(globals.api_url_ep, "https", 5) == 0) {
+    if(strncasecmp(globals->api_url_ep, "https", 5) == 0) {
         switch_curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0);
         switch_curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 0);
     }
-    if(globals.proxy) {
-        if(globals.proxy_credentials != NULL) {
+    if(globals->proxy) {
+        if(globals->proxy_credentials != NULL) {
             switch_curl_easy_setopt(curl_handle, CURLOPT_PROXYAUTH, CURLAUTH_ANY);
-            switch_curl_easy_setopt(curl_handle, CURLOPT_PROXYUSERPWD, globals.proxy_credentials);
+            switch_curl_easy_setopt(curl_handle, CURLOPT_PROXYUSERPWD, globals->proxy_credentials);
         }
-        if(strncasecmp(globals.proxy, "https", 5) == 0) {
+        if(strncasecmp(globals->proxy, "https", 5) == 0) {
             switch_curl_easy_setopt(curl_handle, CURLOPT_PROXY_SSL_VERIFYPEER, 0);
         }
-        switch_curl_easy_setopt(curl_handle, CURLOPT_PROXY, globals.proxy);
+        switch_curl_easy_setopt(curl_handle, CURLOPT_PROXY, globals->proxy);
     }
 
-    switch_curl_easy_setopt(curl_handle, CURLOPT_URL, globals.api_url_ep);
+    switch_curl_easy_setopt(curl_handle, CURLOPT_URL, globals->api_url_ep);
 
     curl_ret = switch_curl_easy_perform(curl_handle);
     if(!curl_ret) {
@@ -84,7 +99,7 @@ switch_status_t curl_perform(gasr_ctx_t *asr_ctx) {
     }
 
     if(http_resp != 200) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "http-error=[%ld] (%s)\n", http_resp, globals.api_url);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "http-error=[%ld] (%s)\n", http_resp, globals->api_url);
         status = SWITCH_STATUS_FALSE;
     }
 

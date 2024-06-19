@@ -1,25 +1,41 @@
-/**
- * (C)2023 aks
- * https://github.com/akscf/
- **/
+/*
+ * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
+ * Copyright (C) 2005-2014, Anthony Minessale II <anthm@freeswitch.org>
+ *
+ * Version: MPL 1.1
+ *
+ * The contents of this file are subject to the Mozilla Public License Version
+ * 1.1 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ * http://www.mozilla.org/MPL/
+ *
+ * Software distributed under the License is distributed on an "AS IS" basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
+ * License.
+ *
+ * Module Contributor(s):
+ *  Konstantin Alexandrin <akscfx@gmail.com>
+ *
+ *
+ * mod_google_asr.c -- google speech-to-text service interface
+ *
+ * Provides Google STT service for the Freeswitch.
+ * https://cloud.google.com/speech-to-text/docs/reference/rest
+ *
+ */
 #include "mod_google_asr.h"
 
-globals_t globals;
+static globals_t globals;
 
 SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load);
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_google_asr_shutdown);
 SWITCH_MODULE_DEFINITION(mod_google_asr, mod_google_asr_load, mod_google_asr_shutdown, NULL);
 
-/**
- ** https://cloud.google.com/speech-to-text/docs/sync-recognize#speech-sync-recognize-drest
- ** https://cloud.google.com/speech-to-text/docs/reference/rest/v1/RecognitionConfig
- ** https://cloud.google.com/speech-to-text/docs/reference/rest/v1/RecognitionConfig#AudioEncoding
- **/
 
-// ---------------------------------------------------------------------------------------------------------------------------------------------
-static void *SWITCH_THREAD_FUNC transcript_thread(switch_thread_t *thread, void *obj) {
-    volatile gasr_ctx_t *_ref = (gasr_ctx_t *) obj;
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *) _ref;
+static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void *obj) {
+    volatile gasr_ctx_t *_ref = (gasr_ctx_t *)obj;
+    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)_ref;
     switch_status_t status;
     switch_byte_t *base64_buffer = NULL;
     switch_byte_t *curl_send_buffer = NULL;
@@ -28,24 +44,24 @@ static void *SWITCH_THREAD_FUNC transcript_thread(switch_thread_t *thread, void 
     switch_memory_pool_t *pool = NULL;
     cJSON *json = NULL;
     uint32_t base64_buffer_size = 0, chunk_buffer_size = 0, recv_len = 0;
-    uint8_t fl_do_transcript = false;
+    uint8_t fl_do_transcribe = SWITCH_FALSE;
     const void *curl_recv_buffer_ptr = NULL;
     void *pop = NULL;
 
     switch_mutex_lock(asr_ctx->mutex);
-    asr_ctx->deps++;
+    asr_ctx->refs++;
     switch_mutex_unlock(asr_ctx->mutex);
 
     if(switch_core_new_memory_pool(&pool) != SWITCH_STATUS_SUCCESS) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "pool fail\n");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "switch_core_new_memory_pool()\n");
         goto out;
     }
     if(switch_buffer_create_dynamic(&curl_recv_buffer, 1024, 4096, 16384) != SWITCH_STATUS_SUCCESS) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "mem fail\n");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_buffer_create_dynamic()\n");
         goto out;
     }
 
-    while(true) {
+    while(SWITCH_TRUE) {
         if(globals.fl_shutdown || asr_ctx->fl_destroyed ) {
             break;
         }
@@ -57,7 +73,7 @@ static void *SWITCH_THREAD_FUNC transcript_thread(switch_thread_t *thread, void 
 
             if(chunk_buffer_size > 0) {
                 if(switch_buffer_create(pool, &chunk_buffer, chunk_buffer_size) != SWITCH_STATUS_SUCCESS) {
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "mem fail\n");
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "switch_buffer_create()\n");
                     break;
                 }
                 switch_buffer_zero(chunk_buffer);
@@ -66,7 +82,7 @@ static void *SWITCH_THREAD_FUNC transcript_thread(switch_thread_t *thread, void 
             goto timer_next;
         }
 
-        fl_do_transcript = false;
+        fl_do_transcribe = SWITCH_FALSE;
         while(switch_queue_trypop(asr_ctx->q_audio, &pop) == SWITCH_STATUS_SUCCESS) {
             xdata_buffer_t *audio_buffer = (xdata_buffer_t *)pop;
             if(globals.fl_shutdown || asr_ctx->fl_destroyed ) {
@@ -75,17 +91,17 @@ static void *SWITCH_THREAD_FUNC transcript_thread(switch_thread_t *thread, void 
             }
             if(audio_buffer && audio_buffer->len) {
                 if(switch_buffer_write(chunk_buffer, audio_buffer->data, audio_buffer->len) >= chunk_buffer_size) {
-                    fl_do_transcript = true;
+                    fl_do_transcribe = SWITCH_TRUE;
                     break;
                 }
             }
             xdata_buffer_free(&audio_buffer);
         }
-        if(!fl_do_transcript) {
-            fl_do_transcript = (switch_buffer_inuse(chunk_buffer) > 0 && asr_ctx->vad_state == SWITCH_VAD_STATE_STOP_TALKING);
+        if(!fl_do_transcribe) {
+            fl_do_transcribe = (switch_buffer_inuse(chunk_buffer) > 0 && asr_ctx->vad_state == SWITCH_VAD_STATE_STOP_TALKING);
         }
 
-        if(fl_do_transcript) {
+        if(fl_do_transcribe) {
             const void *chunk_buffer_ptr = NULL;
             uint32_t buf_len = switch_buffer_peek_zerocopy(chunk_buffer, &chunk_buffer_ptr);
             uint32_t b64_len = BASE64_ENC_SZ(buf_len) + 1;
@@ -99,20 +115,33 @@ static void *SWITCH_THREAD_FUNC transcript_thread(switch_thread_t *thread, void 
             }
 
             if(switch_b64_encode((uint8_t *)chunk_buffer_ptr, buf_len, base64_buffer, base64_buffer_size) == SWITCH_STATUS_SUCCESS) {
-                curl_send_buffer = (char*) switch_mprintf(
-                                "{'config':{" \
-                                "'languageCode':'%s', 'encoding':'%s', 'sampleRateHertz':'%u', 'audioChannelCount':'%u', 'maxAlternatives':'%u', 'profanityFilter':'%s', 'enableWordTimeOffsets':'%s', 'enableWordConfidence':'%s', " \
-                                "'enableAutomaticPunctuation':'%s', 'enableSpokenPunctuation':'%s', 'enableSpokenEmojis':'%s', 'model':'%s', 'useEnhanced':'%s', " \
-                                "'diarizationConfig':{'enableSpeakerDiarization': '%s', 'minSpeakerCount': '%u', 'maxSpeakerCount': '%u'}, " \
-                                "'metadata':{'interactionType':'%s', 'microphoneDistance':'%s', 'recordingDeviceType':'%s'}" \
-                                "}, 'audio':{'content':'%s'}}",
-                                asr_ctx->lang, asr_ctx->opt_encoding, asr_ctx->samplerate, asr_ctx->channels,
-                                asr_ctx->opt_max_alternatives,
-                                BOOL2STR(asr_ctx->opt_enable_profanity_filter), BOOL2STR(asr_ctx->opt_enable_word_time_offsets), BOOL2STR(asr_ctx->opt_enable_word_confidence), BOOL2STR(asr_ctx->opt_enable_automatic_punctuation),
-                                BOOL2STR(asr_ctx->opt_enable_spoken_punctuation), BOOL2STR(asr_ctx->opt_enable_spoken_emojis), asr_ctx->opt_speech_model, BOOL2STR(asr_ctx->opt_use_enhanced_model),
-                                BOOL2STR(asr_ctx->opt_enable_speaker_diarization), asr_ctx->opt_diarization_min_speaker_count, asr_ctx->opt_diarization_max_speaker_count,
-                                asr_ctx->opt_meta_interaction_type, asr_ctx->opt_meta_microphone_distance, asr_ctx->opt_meta_recording_device_type,
-                                base64_buffer );
+                curl_send_buffer = (switch_byte_t *)switch_mprintf( "{'config':{" \
+                                            "'languageCode':'%s', 'encoding':'%s', 'sampleRateHertz':'%u', 'audioChannelCount':'%u', 'maxAlternatives':'%u', " \
+                                            "'profanityFilter':'%s', 'enableWordTimeOffsets':'%s', 'enableWordConfidence':'%s', 'enableAutomaticPunctuation':'%s', " \
+                                            "'enableSpokenPunctuation':'%s', 'enableSpokenEmojis':'%s', 'model':'%s', 'useEnhanced':'%s', " \
+                                            " 'diarizationConfig':{'enableSpeakerDiarization': '%s', 'minSpeakerCount': '%u', 'maxSpeakerCount': '%u'}, " \
+                                            "'metadata':{'interactionType':'%s', 'microphoneDistance':'%s', 'recordingDeviceType':'%s'}}, 'audio':{'content':'%s'}}",
+                                            asr_ctx->lang,
+                                            globals.opt_encoding,
+                                            asr_ctx->samplerate,
+                                            asr_ctx->channels,
+                                            asr_ctx->opt_max_alternatives,
+                                            BOOL2STR(asr_ctx->opt_enable_profanity_filter),
+                                            BOOL2STR(asr_ctx->opt_enable_word_time_offsets),
+                                            BOOL2STR(asr_ctx->opt_enable_word_confidence),
+                                            BOOL2STR(asr_ctx->opt_enable_automatic_punctuation),
+                                            BOOL2STR(asr_ctx->opt_enable_spoken_punctuation),
+                                            BOOL2STR(asr_ctx->opt_enable_spoken_emojis),
+                                            asr_ctx->opt_speech_model,
+                                            BOOL2STR(asr_ctx->opt_use_enhanced_model),
+                                            BOOL2STR(asr_ctx->opt_enable_speaker_diarization),
+                                            asr_ctx->opt_diarization_min_speaker_count,
+                                            asr_ctx->opt_diarization_max_speaker_count,
+                                            asr_ctx->opt_meta_interaction_type,
+                                            asr_ctx->opt_meta_microphone_distance,
+                                            asr_ctx->opt_meta_recording_device_type,
+                                            base64_buffer
+                                        );
 
                 asr_ctx->curl_send_buffer_ref = curl_send_buffer;
                 asr_ctx->curl_send_buffer_len = strlen((const char *)curl_send_buffer);
@@ -120,11 +149,13 @@ static void *SWITCH_THREAD_FUNC transcript_thread(switch_thread_t *thread, void 
                 switch_buffer_zero(curl_recv_buffer);
                 asr_ctx->curl_recv_buffer_ref = curl_recv_buffer;
 
-                status = curl_perform(asr_ctx);
+                status = curl_perform(asr_ctx, &globals);
                 recv_len = switch_buffer_peek_zerocopy(curl_recv_buffer, &curl_recv_buffer_ptr);
 
                 if(status == SWITCH_STATUS_SUCCESS) {
-                    if((json = cJSON_Parse((char *) curl_recv_buffer_ptr)) != NULL) {
+                    status = SWITCH_STATUS_FALSE;
+
+                    if((json = cJSON_Parse((char *)curl_recv_buffer_ptr)) != NULL) {
                         cJSON *jres = cJSON_GetObjectItem(json, "results");
                         if(jres && cJSON_GetArraySize(jres) > 0) {
                             cJSON *jelem = cJSON_GetArrayItem(jres, 0);
@@ -133,15 +164,16 @@ static void *SWITCH_THREAD_FUNC transcript_thread(switch_thread_t *thread, void 
                                 if(jres && cJSON_GetArraySize(jres) > 0) {
                                     jelem = cJSON_GetArrayItem(jres, 0);
                                     if(jelem) {
-                                        cJSON *jt = cJSON_GetObjectItem(jelem, "transcript"); // jt->valuestring
-                                        cJSON *jc = cJSON_GetObjectItem(jelem, "confidence"); // jc->valuedouble
+                                        cJSON *jt = cJSON_GetObjectItem(jelem, "transcript");
                                         if(jt && jt->valuestring) {
                                             xdata_buffer_t *tbuff = NULL;
-                                            if(xdata_buffer_alloc(&tbuff, jt->valuestring, strlen(jt->valuestring)) == SWITCH_STATUS_SUCCESS) {
+                                            if(xdata_buffer_alloc(&tbuff, (switch_byte_t*)jt->valuestring, strlen(jt->valuestring)) == SWITCH_STATUS_SUCCESS) {
                                                 if(switch_queue_trypush(asr_ctx->q_text, tbuff) == SWITCH_STATUS_SUCCESS) {
                                                     switch_mutex_lock(asr_ctx->mutex);
-                                                    asr_ctx->transcript_results++;
+                                                    asr_ctx->transcription_results++;
                                                     switch_mutex_unlock(asr_ctx->mutex);
+
+                                                    status = SWITCH_STATUS_SUCCESS;
                                                 } else {
                                                     xdata_buffer_free(&tbuff);
                                                 }
@@ -150,23 +182,42 @@ static void *SWITCH_THREAD_FUNC transcript_thread(switch_thread_t *thread, void 
                                     }
                                 }
                             }
+                        } else { /* empty result */
+                            const char *str = "";
+                            xdata_buffer_t *tbuff = NULL;
+
+                            if(xdata_buffer_alloc(&tbuff, (switch_byte_t *)str, strlen(str)) == SWITCH_STATUS_SUCCESS) {
+                                if(switch_queue_trypush(asr_ctx->q_text, tbuff) == SWITCH_STATUS_SUCCESS) {
+                                    switch_mutex_lock(asr_ctx->mutex);
+                                    asr_ctx->transcription_results++;
+                                    switch_mutex_unlock(asr_ctx->mutex);
+
+                                    status = SWITCH_STATUS_SUCCESS;
+                                } else {
+                                    xdata_buffer_free(&tbuff);
+                                }
+                            }
                         }
                     }
                     if(json) {
                         cJSON_Delete(json);
                         json = NULL;
                     }
+                    if(status != SWITCH_STATUS_SUCCESS) {
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to parse response: %s\n", (char *)curl_recv_buffer_ptr);
+                    }
                 } else {
                     if(recv_len > 0) {
-                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "GCP-RESPONSE: %s\n", (char *) curl_recv_buffer_ptr);
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Services response: %s\n", (char *)curl_recv_buffer_ptr);
                     }
                 }
                 switch_safe_free(curl_send_buffer);
             } else {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "b64_encode fail\n");
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_b64_encode() failed\n");
             }
             switch_buffer_zero(chunk_buffer);
         }
+
         timer_next:
         switch_yield(10000);
     }
@@ -189,34 +240,39 @@ out:
     }
 
     switch_mutex_lock(asr_ctx->mutex);
-    if(asr_ctx->deps > 0) asr_ctx->deps--;
+    if(asr_ctx->refs > 0) asr_ctx->refs--;
     switch_mutex_unlock(asr_ctx->mutex);
 
-    thread_finished();
+    switch_mutex_lock(globals.mutex);
+    if(globals.active_threads > 0) globals.active_threads--;
+    switch_mutex_unlock(globals.mutex);
 
     return NULL;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------------------
+// asr interface
+// ---------------------------------------------------------------------------------------------------------------------------------------------
 static switch_status_t asr_open(switch_asr_handle_t *ah, const char *codec, int samplerate, const char *dest, switch_asr_flag_t *flags) {
     switch_status_t status = SWITCH_STATUS_SUCCESS;
-    switch_memory_pool_t *pool = NULL;
+    switch_threadattr_t *attr = NULL;
+    switch_thread_t *thread = NULL;
     gasr_ctx_t *asr_ctx = NULL;
 
     if(strcmp(codec, "L16") !=0) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unsupported codec: %s\n", codec);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unsupported encoding: %s\n", codec);
         switch_goto_status(SWITCH_STATUS_FALSE, out);
     }
 
     if((asr_ctx = switch_core_alloc(ah->memory_pool, sizeof(gasr_ctx_t))) == NULL) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "mem fail\n");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_core_alloc()\n");
         switch_goto_status(SWITCH_STATUS_GENERR, out);
     }
 
     asr_ctx->chunk_buffer_size = 0;
     asr_ctx->samplerate = samplerate;
     asr_ctx->channels = 1;
-    asr_ctx->lang = (char *) globals.default_lang;
+    asr_ctx->lang = (char *)globals.default_lang;
     asr_ctx->opt_max_alternatives = globals.opt_max_alternatives;
     asr_ctx->opt_enable_profanity_filter = globals.opt_enable_profanity_filter;
     asr_ctx->opt_enable_word_time_offsets = globals.opt_enable_word_time_offsets;
@@ -229,60 +285,68 @@ static switch_status_t asr_open(switch_asr_handle_t *ah, const char *codec, int 
     asr_ctx->opt_meta_recording_device_type = globals.opt_meta_recording_device_type;
     asr_ctx->opt_speech_model = globals.opt_speech_model;
     asr_ctx->opt_use_enhanced_model = globals.opt_use_enhanced_model;
-    asr_ctx->opt_enable_speaker_diarization = false;
+    asr_ctx->opt_enable_speaker_diarization = SWITCH_FALSE;
     asr_ctx->opt_diarization_min_speaker_count = 1;
     asr_ctx->opt_diarization_max_speaker_count = 1;
 
    if((status = switch_mutex_init(&asr_ctx->mutex, SWITCH_MUTEX_NESTED, ah->memory_pool)) != SWITCH_STATUS_SUCCESS) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "mem fail\n");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_mutex_init()\n");
         switch_goto_status(SWITCH_STATUS_GENERR, out);
     }
+
     switch_queue_create(&asr_ctx->q_audio, QUEUE_SIZE, ah->memory_pool);
     switch_queue_create(&asr_ctx->q_text, QUEUE_SIZE, ah->memory_pool);
 
-    // VAD
     asr_ctx->fl_vad_enabled = globals.fl_vad_enabled;
     asr_ctx->vad_buffer = NULL;
     asr_ctx->frame_len = 0;
-    asr_ctx->vad_buffer_size = 0; // will be calculated in the feed function
+    asr_ctx->vad_buffer_size = 0;
     asr_ctx->vad_stored_frames = 0;
-    asr_ctx->fl_vad_first_cycle = true;
+    asr_ctx->fl_vad_first_cycle = SWITCH_TRUE;
 
     if((asr_ctx->vad = switch_vad_init(asr_ctx->samplerate, asr_ctx->channels)) == NULL) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Couldn't init VAD\n");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_vad_init()\n");
         switch_goto_status(SWITCH_STATUS_GENERR, out);
     }
     switch_vad_set_mode(asr_ctx->vad, -1);
     switch_vad_set_param(asr_ctx->vad, "debug", globals.fl_vad_debug);
     if(globals.vad_silence_ms > 0) { switch_vad_set_param(asr_ctx->vad, "silence_ms", globals.vad_silence_ms); }
-    if(globals.vad_voice_ms > 0) { switch_vad_set_param(asr_ctx->vad, "voice_ms", globals.vad_voice_ms); }
-    if(globals.vad_threshold > 0) { switch_vad_set_param(asr_ctx->vad, "thresh", globals.vad_threshold); }
+    if(globals.vad_voice_ms > 0)   { switch_vad_set_param(asr_ctx->vad, "voice_ms", globals.vad_voice_ms); }
+    if(globals.vad_threshold > 0)  { switch_vad_set_param(asr_ctx->vad, "thresh", globals.vad_threshold); }
 
     ah->private_info = asr_ctx;
 
-    thread_launch(ah->memory_pool, transcript_thread, asr_ctx);
+    switch_mutex_lock(globals.mutex);
+    globals.active_threads++;
+    switch_mutex_unlock(globals.mutex);
+
+    switch_threadattr_create(&attr, ah->memory_pool);
+    switch_threadattr_detach_set(attr, 1);
+    switch_threadattr_stacksize_set(attr, SWITCH_THREAD_STACKSIZE);
+    switch_thread_create(&thread, attr, transcribe_thread, asr_ctx, ah->memory_pool);
+
 out:
     return status;
 }
 
 static switch_status_t asr_close(switch_asr_handle_t *ah, switch_asr_flag_t *flags) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *) ah->private_info;
-    uint8_t fl_wloop = true;
+    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+    uint8_t fl_wloop = SWITCH_TRUE;
 
     assert(asr_ctx != NULL);
 
-    asr_ctx->fl_abort = true;
-    asr_ctx->fl_destroyed = true;
+    asr_ctx->fl_abort = SWITCH_TRUE;
+    asr_ctx->fl_destroyed = SWITCH_TRUE;
 
     switch_mutex_lock(asr_ctx->mutex);
-    fl_wloop = (asr_ctx->deps != 0);
+    fl_wloop = (asr_ctx->refs != 0);
     switch_mutex_unlock(asr_ctx->mutex);
 
     if(fl_wloop) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Waiting for unlock (%u locks)!\n", asr_ctx->deps);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Waiting for unlock (refs=%u)...\n", asr_ctx->refs);
         while(fl_wloop) {
             switch_mutex_lock(asr_ctx->mutex);
-            fl_wloop = (asr_ctx->deps != 0);
+            fl_wloop = (asr_ctx->refs != 0);
             switch_mutex_unlock(asr_ctx->mutex);
             switch_yield(100000);
         }
@@ -310,9 +374,9 @@ static switch_status_t asr_close(switch_asr_handle_t *ah, switch_asr_flag_t *fla
 }
 
 static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned int data_len, switch_asr_flag_t *flags) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *) ah->private_info;
+    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
     switch_vad_state_t vad_state = 0;
-    uint8_t fl_has_audio = false;
+    uint8_t fl_has_audio = SWITCH_FALSE;
 
     assert(asr_ctx != NULL);
 
@@ -332,14 +396,13 @@ static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned in
     if(data_len > 0 && asr_ctx->frame_len == 0) {
         switch_mutex_lock(asr_ctx->mutex);
         asr_ctx->frame_len = data_len;
-        asr_ctx->ptime = (data_len / sizeof(int16_t)) / (asr_ctx->samplerate / 1000);
-        asr_ctx->chunk_buffer_size = ((globals.chunk_size_sec * 1000) * data_len) / asr_ctx->ptime;
-        asr_ctx->vad_buffer_size = (asr_ctx->frame_len * VAD_STORE_FRAMES);
+        asr_ctx->vad_buffer_size = asr_ctx->frame_len * VAD_STORE_FRAMES;
+        asr_ctx->chunk_buffer_size = asr_ctx->samplerate * globals.chunk_time_sec;
         switch_mutex_unlock(asr_ctx->mutex);
 
         if(switch_buffer_create(ah->memory_pool, &asr_ctx->vad_buffer, asr_ctx->vad_buffer_size) != SWITCH_STATUS_SUCCESS) {
             asr_ctx->vad_buffer_size = 0;
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "mem fail (vad_buffer)\n");
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_buffer_create()\n");
         }
     }
 
@@ -349,7 +412,7 @@ static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned in
                 if(asr_ctx->vad_stored_frames >= VAD_STORE_FRAMES) {
                     switch_buffer_zero(asr_ctx->vad_buffer);
                     asr_ctx->vad_stored_frames = 0;
-                    asr_ctx->fl_vad_first_cycle = false;
+                    asr_ctx->fl_vad_first_cycle = SWITCH_FALSE;
                 }
                 switch_buffer_write(asr_ctx->vad_buffer, data, MIN(asr_ctx->frame_len, data_len));
                 asr_ctx->vad_stored_frames++;
@@ -359,17 +422,17 @@ static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned in
         vad_state = switch_vad_process(asr_ctx->vad, (int16_t *)data, (data_len / sizeof(int16_t)));
         if(vad_state == SWITCH_VAD_STATE_START_TALKING) {
             asr_ctx->vad_state = vad_state;
-            fl_has_audio = true;
+            fl_has_audio = SWITCH_TRUE;
         } else if (vad_state == SWITCH_VAD_STATE_STOP_TALKING) {
             asr_ctx->vad_state = vad_state;
-            fl_has_audio = false;
+            fl_has_audio = SWITCH_FALSE;
             switch_vad_reset(asr_ctx->vad);
         } else if (vad_state == SWITCH_VAD_STATE_TALKING) {
             asr_ctx->vad_state = vad_state;
-            fl_has_audio = true;
+            fl_has_audio = SWITCH_TRUE;
         }
     } else {
-        fl_has_audio = true;
+        fl_has_audio = SWITCH_TRUE;
     }
 
     if(fl_has_audio) {
@@ -430,14 +493,14 @@ static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned in
 }
 
 static switch_status_t asr_check_results(switch_asr_handle_t *ah, switch_asr_flag_t *flags) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *) ah->private_info;
+    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
     assert(asr_ctx != NULL);
 
-    return (asr_ctx->transcript_results > 0 ? SWITCH_STATUS_SUCCESS : SWITCH_STATUS_FALSE);
+    return (asr_ctx->transcription_results > 0 ? SWITCH_STATUS_SUCCESS : SWITCH_STATUS_FALSE);
 }
 
 static switch_status_t asr_get_results(switch_asr_handle_t *ah, char **xmlstr, switch_asr_flag_t *flags) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *) ah->private_info;
+    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
     char *result = NULL;
     void *pop = NULL;
 
@@ -445,6 +508,7 @@ static switch_status_t asr_get_results(switch_asr_handle_t *ah, char **xmlstr, s
 
     if(switch_queue_trypop(asr_ctx->q_text, &pop) == SWITCH_STATUS_SUCCESS) {
         xdata_buffer_t *tbuff = (xdata_buffer_t *)pop;
+
         if(tbuff->len > 0) {
             switch_zmalloc(result, tbuff->len + 1);
             memcpy(result, tbuff->data, tbuff->len);
@@ -452,7 +516,7 @@ static switch_status_t asr_get_results(switch_asr_handle_t *ah, char **xmlstr, s
         xdata_buffer_free(&tbuff);
 
         switch_mutex_lock(asr_ctx->mutex);
-        if(asr_ctx->transcript_results > 0) asr_ctx->transcript_results--;
+        if(asr_ctx->transcription_results > 0) asr_ctx->transcription_results--;
         switch_mutex_unlock(asr_ctx->mutex);
     }
 
@@ -461,36 +525,40 @@ static switch_status_t asr_get_results(switch_asr_handle_t *ah, char **xmlstr, s
 }
 
 static switch_status_t asr_start_input_timers(switch_asr_handle_t *ah) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *) ah->private_info;
+    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+
     assert(asr_ctx != NULL);
 
     return SWITCH_STATUS_SUCCESS;
 }
 
 static switch_status_t asr_pause(switch_asr_handle_t *ah) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *) ah->private_info;
+    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+
     assert(asr_ctx != NULL);
 
     if(!asr_ctx->fl_pause) {
-        asr_ctx->fl_pause = true;
+        asr_ctx->fl_pause = SWITCH_TRUE;
     }
 
     return SWITCH_STATUS_SUCCESS;
 }
 
 static switch_status_t asr_resume(switch_asr_handle_t *ah) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *) ah->private_info;
+    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+
     assert(asr_ctx != NULL);
 
     if(asr_ctx->fl_pause) {
-        asr_ctx->fl_pause = false;
+        asr_ctx->fl_pause = SWITCH_FALSE;
     }
 
     return SWITCH_STATUS_SUCCESS;
 }
 
 static void asr_text_param(switch_asr_handle_t *ah, char *param, const char *val) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *) ah->private_info;
+    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+
     assert(asr_ctx != NULL);
 
     if(strcasecmp(param, "vad") == 0) {
@@ -528,7 +596,6 @@ static void asr_text_param(switch_asr_handle_t *ah, char *param, const char *val
     } else if(!strcasecmp(param, "diarization-max-speakers")) {
         if(val) asr_ctx->opt_diarization_max_speaker_count = atoi(val);
     }
-
 }
 
 static void asr_numeric_param(switch_asr_handle_t *ah, char *param, int val) {
@@ -548,18 +615,16 @@ static switch_status_t asr_unload_grammar(switch_asr_handle_t *ah, const char *n
 // ---------------------------------------------------------------------------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------------------------------------------------------------------------
-#define CONFIG_NAME "google_asr.conf"
 SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
     switch_status_t status = SWITCH_STATUS_SUCCESS;
     switch_xml_t cfg, xml, settings, param;
     switch_asr_interface_t *asr_interface;
 
     memset(&globals, 0, sizeof(globals));
-
     switch_mutex_init(&globals.mutex, SWITCH_MUTEX_NESTED, pool);
 
-    if((xml = switch_xml_open_cfg(CONFIG_NAME, &cfg, NULL)) == NULL) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Couldn't open configuration file: %s\n", CONFIG_NAME);
+    if((xml = switch_xml_open_cfg(MOD_CONFIG_NAME, &cfg, NULL)) == NULL) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to open configuration: %s\n", MOD_CONFIG_NAME);
         switch_goto_status(SWITCH_STATUS_GENERR, out);
     }
 
@@ -592,8 +657,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
                 if(val) globals.default_lang = switch_core_strdup(pool, gcp_get_language(val));
             } else if(!strcasecmp(var, "encoding")) {
                 if(val) globals.opt_encoding = switch_core_strdup(pool, gcp_get_encoding(val));
-            } else if(!strcasecmp(var, "chunk-size-sec")) {
-                if(val) globals.chunk_size_sec = atoi(val);
+            } else if(!strcasecmp(var, "chunk-time-sec")) {
+                if(val) globals.chunk_time_sec = atoi(val);
             } else if(!strcasecmp(var, "request-timeout")) {
                 if(val) globals.request_timeout = atoi(val);
             } else if(!strcasecmp(var, "connect-timeout")) {
@@ -627,11 +692,11 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
     }
 
     if(!globals.api_url) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Invalid parameter: api-url\n");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Missing required parameter: api-url\n");
         switch_goto_status(SWITCH_STATUS_GENERR, out);
     }
     if(!globals.api_key) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Invalid parameter: api-key\n");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Missing required parameter: api-key\n");
         switch_goto_status(SWITCH_STATUS_GENERR, out);
     }
 
@@ -640,15 +705,14 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
         globals.api_url_ep = strdup(globals.api_key);
     }
 
-    globals.chunk_size_sec = globals.chunk_size_sec > DEF_CHUNK_SZ_SEC ? globals.chunk_size_sec : DEF_CHUNK_SZ_SEC;
-    globals.opt_encoding = globals.opt_encoding ?  globals.opt_encoding : gcp_get_encoding("l16");
+    globals.chunk_time_sec = globals.chunk_time_sec > DEF_CHUNK_TIME_SEC ? globals.chunk_time_sec : DEF_CHUNK_TIME_SEC;
+    globals.opt_encoding = globals.opt_encoding ? globals.opt_encoding : gcp_get_encoding("l16");
     globals.opt_speech_model = globals.opt_speech_model ?  globals.opt_speech_model : "phone_call";
     globals.opt_max_alternatives = globals.opt_max_alternatives > 0 ? globals.opt_max_alternatives : 1;
     globals.opt_meta_microphone_distance = globals.opt_meta_microphone_distance ? globals.opt_meta_microphone_distance : gcp_get_microphone_distance("unspecified");
     globals.opt_meta_recording_device_type = globals.opt_meta_recording_device_type ? globals.opt_meta_recording_device_type : gcp_get_recording_device("unspecified");
     globals.opt_meta_interaction_type = globals.opt_meta_interaction_type ? globals.opt_meta_interaction_type : gcp_get_interaction("unspecified");
 
-    // -------------------------
     *module_interface = switch_loadable_module_create_module_interface(pool, modname);
 
     asr_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_ASR_INTERFACE);
@@ -667,7 +731,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
     asr_interface->asr_load_grammar = asr_load_grammar;
     asr_interface->asr_unload_grammar = asr_unload_grammar;
 
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "GoogleASR-%s\n", VERSION);
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "GoogleASR (%s)\n", MOD_VERSION);
 out:
     if(xml) {
         switch_xml_free(xml);
@@ -676,16 +740,16 @@ out:
 }
 
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_google_asr_shutdown) {
-    uint8_t fl_wloop = true;
+    uint8_t fl_wloop = SWITCH_TRUE;
 
-    globals.fl_shutdown = true;
+    globals.fl_shutdown = SWITCH_TRUE;
 
     switch_mutex_lock(globals.mutex);
     fl_wloop = (globals.active_threads > 0);
     switch_mutex_unlock(globals.mutex);
 
     if(fl_wloop) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Waiting for termination '%d' threads...\n", globals.active_threads);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Waiting for termination (%d) threads...\n", globals.active_threads);
         while(fl_wloop) {
             switch_mutex_lock(globals.mutex);
             fl_wloop = (globals.active_threads > 0);

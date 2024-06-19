@@ -1,39 +1,48 @@
-/**
- * (C)2023 aks
- * https://github.com/akscf/
- **/
+/*
+ * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
+ * Copyright (C) 2005-2014, Anthony Minessale II <anthm@freeswitch.org>
+ *
+ * Version: MPL 1.1
+ *
+ * The contents of this file are subject to the Mozilla Public License Version
+ * 1.1 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ * http://www.mozilla.org/MPL/
+ *
+ * Software distributed under the License is distributed on an "AS IS" basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
+ * License.
+ *
+ * Module Contributor(s):
+ *  Konstantin Alexandrin <akscfx@gmail.com>
+ *
+ *
+ *
+ */
 #ifndef MOD_GOOGLE_ASR_H
 #define MOD_GOOGLE_ASR_H
 
 #include <switch.h>
-#include <switch_stun.h>
 #include <switch_curl.h>
 #include <switch_json.h>
-#include <stdint.h>
-#include <string.h>
-
-#ifndef true
-#define true SWITCH_TRUE
-#endif
-#ifndef false
-#define false SWITCH_FALSE
-#endif
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 
-#define VERSION             "1.0 (gcp-asr-api-v1_http)"
+#define MOD_CONFIG_NAME     "google_asr.conf"
+#define MOD_VERSION         "1.0_gcp_api_v1"
 #define QUEUE_SIZE          64
 #define VAD_STORE_FRAMES    32
 #define VAD_RECOVERY_FRAMES 10
-#define DEF_CHUNK_SZ_SEC    15
+#define DEF_CHUNK_TIME_SEC  15
 #define BASE64_ENC_SZ(n)    (4*((n+2)/3))
 #define BOOL2STR(v)         (v ? "true" : "false")
 
 typedef struct {
     switch_mutex_t          *mutex;
     uint32_t                active_threads;
-    uint32_t                chunk_size_sec;
+    uint32_t                chunk_time_sec;
     uint32_t                vad_silence_ms;
     uint32_t                vad_voice_ms;
     uint32_t                vad_threshold;
@@ -43,17 +52,17 @@ typedef struct {
     uint8_t                 fl_vad_enabled;
     uint8_t                 fl_shutdown;
     char                    *api_url_ep;
-    const char              *api_key;
-    const char              *api_url;
-    const char              *user_agent;
-    const char              *default_lang;
-    const char              *proxy;
-    const char              *proxy_credentials;
-    const char              *opt_encoding;
-    const char              *opt_speech_model;
-    const char              *opt_meta_microphone_distance;
-    const char              *opt_meta_recording_device_type;
-    const char              *opt_meta_interaction_type;
+    char                    *api_key;
+    char                    *api_url;
+    char                    *user_agent;
+    char                    *default_lang;
+    char                    *proxy;
+    char                    *proxy_credentials;
+    char                    *opt_encoding;
+    char                    *opt_speech_model;
+    char                    *opt_meta_microphone_distance;
+    char                    *opt_meta_recording_device_type;
+    char                    *opt_meta_interaction_type;
     uint32_t                opt_max_alternatives;
     uint32_t                opt_use_enhanced_model;
     uint32_t                opt_enable_word_time_offsets;
@@ -77,26 +86,24 @@ typedef struct {
     char                    *lang;
     switch_vad_state_t      vad_state;
     uint32_t                curl_send_buffer_len;
-    int32_t                 transcript_results;
+    uint32_t                transcription_results;
     uint32_t                vad_buffer_size;
     uint32_t                vad_stored_frames;
     uint32_t                chunk_buffer_size;
-    uint32_t                deps;
+    uint32_t                refs;
     uint32_t                samplerate;
     uint32_t                channels;
     uint32_t                frame_len;
-    uint32_t                ptime;
     uint8_t                 fl_pause;
     uint8_t                 fl_vad_enabled;
     uint8_t                 fl_vad_first_cycle;
     uint8_t                 fl_destroyed;
     uint8_t                 fl_abort;
     //
-    const char              *opt_encoding;
-    const char              *opt_speech_model;
-    const char              *opt_meta_microphone_distance;
-    const char              *opt_meta_recording_device_type;
-    const char              *opt_meta_interaction_type;
+    char                    *opt_speech_model;
+    char                    *opt_meta_microphone_distance;
+    char                    *opt_meta_recording_device_type;
+    char                    *opt_meta_interaction_type;
     uint32_t                opt_max_alternatives;
     uint32_t                opt_use_enhanced_model;
     uint32_t                opt_enable_word_time_offsets;
@@ -115,16 +122,15 @@ typedef struct {
     switch_byte_t           *data;
 } xdata_buffer_t;
 
+
+/* curl.c */
+switch_status_t curl_perform(gasr_ctx_t *asr_ctx, globals_t *globals);
+
 /* utils.c */
-void thread_finished();
-void thread_launch(switch_memory_pool_t *pool, switch_thread_start_t fun, void *data);
 switch_status_t xdata_buffer_push(switch_queue_t *queue, switch_byte_t *data, uint32_t data_len);
 switch_status_t xdata_buffer_alloc(xdata_buffer_t **out, switch_byte_t *data, uint32_t data_len);
 void xdata_buffer_free(xdata_buffer_t **buf);
 void xdata_buffer_queue_clean(switch_queue_t *queue);
-
-char *audio_file_write(switch_byte_t *buf, uint32_t buf_len, uint32_t channels, uint32_t samplerate);
-void data_file_write(switch_byte_t *buf, uint32_t buf_len);
 
 char *gcp_get_language(const char *val);
 char *gcp_get_encoding(const char *val);
@@ -132,7 +138,5 @@ char *gcp_get_microphone_distance(const char *val);
 char *gcp_get_recording_device(const char *val);
 char *gcp_get_interaction(const char *val);
 
-/* curl.c */
-switch_status_t curl_perform(gasr_ctx_t *asr_ctx);
 
 #endif

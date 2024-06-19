@@ -1,24 +1,27 @@
 <configuration name="google_asr.conf" description="">
   <settings>
+    <!-- api settings -->
     <param name="api-url" value="https://speech.googleapis.com/v1/speech:recognize?key=${api-key}" />
     <param name="api-key" value="---YOUR-API-KEY---" />
+
+    <!-- curl settings -->
+    <param name="connect-timeout" value="5" />
+    <param name="request-timeout" value="25" />
 <!-- <param name="proxy" value="http://proxy:port" /> -->
 <!-- <param name="proxy-credentials" value="" /> -->
 <!-- <param name="user-agent" value="Mozilla/1.0" /> -->
 
-    <param name="default-language" value="en" />
-    <param name="encoding" value="l16" />
-    <param name="chunk-size-sec" value="15" />
-    <param name="connect-timeout" value="10" />
-    <param name="request-timeout" value="10" />
-
+    <!-- capture settings -->
+    <param name="chunk-time-sec" value="15" />
     <param name="vad-enable" value="true" />
     <param name="vad-debug" value="false" />
     <param name="vad-silence-ms" value="500" />
     <param name="vad-voice-ms" value="200" />
     <param name="vad-threshold" value="100" />
 
-    <!-- default values -->
+    <!-- service settings -->
+    <param name="encoding" value="l16" />
+    <param name="default-language" value="en" />
     <param name="max-alternatives" value="1" />
     <param name="speech-model" value="phone_call" />
     <param name="use-enhanced-model" value="false" />
