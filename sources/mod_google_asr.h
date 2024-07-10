@@ -30,27 +30,28 @@
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 
-#define MOD_CONFIG_NAME     "google_asr.conf"
-#define MOD_VERSION         "1.0_gcp_api_v1"
-#define QUEUE_SIZE          64
-#define VAD_STORE_FRAMES    32
-#define VAD_RECOVERY_FRAMES 10
-#define DEF_CHUNK_TIME_SEC  15
-#define BASE64_ENC_SZ(n)    (4*((n+2)/3))
-#define BOOL2STR(v)         (v ? "true" : "false")
+#define MOD_CONFIG_NAME         "google_asr.conf"
+#define MOD_VERSION             "1.0.1c"
+#define QUEUE_SIZE              64
+#define VAD_STORE_FRAMES        64
+#define VAD_RECOVERY_FRAMES     20
+#define DEF_SENTENCE_MAX_TIME   15
+#define BASE64_ENC_SZ(n)        (4*((n+2)/3))
+#define BOOL2STR(v)             (v ? "true" : "false")
 
 typedef struct {
     switch_mutex_t          *mutex;
     uint32_t                active_threads;
-    uint32_t                chunk_time_sec;
+    uint32_t                sentence_max_sec;
+    uint32_t                sentence_threshold_sec;
     uint32_t                vad_silence_ms;
     uint32_t                vad_voice_ms;
     uint32_t                vad_threshold;
     uint32_t                request_timeout; // seconds
     uint32_t                connect_timeout; // seconds
     uint8_t                 fl_vad_debug;
-    uint8_t                 fl_vad_enabled;
     uint8_t                 fl_shutdown;
+    char                    *tmp_path;
     char                    *api_url_ep;
     char                    *api_key;
     char                    *api_url;
@@ -95,7 +96,6 @@ typedef struct {
     uint32_t                channels;
     uint32_t                frame_len;
     uint8_t                 fl_pause;
-    uint8_t                 fl_vad_enabled;
     uint8_t                 fl_vad_first_cycle;
     uint8_t                 fl_destroyed;
     uint8_t                 fl_abort;

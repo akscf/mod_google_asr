@@ -43,8 +43,10 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
     switch_buffer_t *curl_recv_buffer = NULL;
     switch_memory_pool_t *pool = NULL;
     cJSON *json = NULL;
+    time_t sentence_timeout = 0;
     uint32_t base64_buffer_size = 0, chunk_buffer_size = 0, recv_len = 0;
-    uint8_t fl_do_transcribe = SWITCH_FALSE;
+    uint32_t schunks = 0;
+    uint8_t fl_cbuff_overflow = SWITCH_FALSE;
     const void *curl_recv_buffer_ptr = NULL;
     void *pop = NULL;
 
@@ -56,7 +58,7 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "switch_core_new_memory_pool()\n");
         goto out;
     }
-    if(switch_buffer_create_dynamic(&curl_recv_buffer, 1024, 4096, 16384) != SWITCH_STATUS_SUCCESS) {
+    if(switch_buffer_create_dynamic(&curl_recv_buffer, 1024, 4096, 32648) != SWITCH_STATUS_SUCCESS) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_buffer_create_dynamic()\n");
         goto out;
     }
@@ -82,7 +84,7 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
             goto timer_next;
         }
 
-        fl_do_transcribe = SWITCH_FALSE;
+        fl_cbuff_overflow = SWITCH_FALSE;
         while(switch_queue_trypop(asr_ctx->q_audio, &pop) == SWITCH_STATUS_SUCCESS) {
             xdata_buffer_t *audio_buffer = (xdata_buffer_t *)pop;
             if(globals.fl_shutdown || asr_ctx->fl_destroyed ) {
@@ -91,17 +93,24 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
             }
             if(audio_buffer && audio_buffer->len) {
                 if(switch_buffer_write(chunk_buffer, audio_buffer->data, audio_buffer->len) >= chunk_buffer_size) {
-                    fl_do_transcribe = SWITCH_TRUE;
+                    fl_cbuff_overflow = SWITCH_TRUE;
                     break;
                 }
+                schunks++;
             }
             xdata_buffer_free(&audio_buffer);
         }
-        if(!fl_do_transcribe) {
-            fl_do_transcribe = (switch_buffer_inuse(chunk_buffer) > 0 && asr_ctx->vad_state == SWITCH_VAD_STATE_STOP_TALKING);
+
+        if(fl_cbuff_overflow) {
+            sentence_timeout = 1;
+        }
+        if(schunks && asr_ctx->vad_state == SWITCH_VAD_STATE_STOP_TALKING) {
+            if(!sentence_timeout) {
+                sentence_timeout = globals.sentence_threshold_sec + switch_epoch_time_now(NULL);
+            }
         }
 
-        if(fl_do_transcribe) {
+        if(sentence_timeout && sentence_timeout <= switch_epoch_time_now(NULL)) {
             const void *chunk_buffer_ptr = NULL;
             uint32_t buf_len = switch_buffer_peek_zerocopy(chunk_buffer, &chunk_buffer_ptr);
             uint32_t b64_len = BASE64_ENC_SZ(buf_len) + 1;
@@ -215,6 +224,9 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
             } else {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_b64_encode() failed\n");
             }
+
+            schunks = 0;
+            sentence_timeout = 0;
             switch_buffer_zero(chunk_buffer);
         }
 
@@ -297,7 +309,6 @@ static switch_status_t asr_open(switch_asr_handle_t *ah, const char *codec, int 
     switch_queue_create(&asr_ctx->q_audio, QUEUE_SIZE, ah->memory_pool);
     switch_queue_create(&asr_ctx->q_text, QUEUE_SIZE, ah->memory_pool);
 
-    asr_ctx->fl_vad_enabled = globals.fl_vad_enabled;
     asr_ctx->vad_buffer = NULL;
     asr_ctx->frame_len = 0;
     asr_ctx->vad_buffer_size = 0;
@@ -397,7 +408,7 @@ static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned in
         switch_mutex_lock(asr_ctx->mutex);
         asr_ctx->frame_len = data_len;
         asr_ctx->vad_buffer_size = asr_ctx->frame_len * VAD_STORE_FRAMES;
-        asr_ctx->chunk_buffer_size = asr_ctx->samplerate * globals.chunk_time_sec;
+        asr_ctx->chunk_buffer_size = asr_ctx->samplerate * globals.sentence_max_sec;
         switch_mutex_unlock(asr_ctx->mutex);
 
         if(switch_buffer_create(ah->memory_pool, &asr_ctx->vad_buffer, asr_ctx->vad_buffer_size) != SWITCH_STATUS_SUCCESS) {
@@ -406,7 +417,7 @@ static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned in
         }
     }
 
-    if(asr_ctx->fl_vad_enabled && asr_ctx->vad_buffer_size) {
+    if(asr_ctx->vad_buffer_size) {
         if(asr_ctx->vad_state == SWITCH_VAD_STATE_STOP_TALKING || (asr_ctx->vad_state == vad_state && vad_state == SWITCH_VAD_STATE_NONE)) {
             if(data_len <= asr_ctx->frame_len) {
                 if(asr_ctx->vad_stored_frames >= VAD_STORE_FRAMES) {
@@ -473,7 +484,7 @@ static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned in
                     tau_buf->len = (rlen + data_len);
                     switch_malloc(tau_buf->data, tau_buf->len);
 
-                    memcpy(tau_buf->data, (void *)ptr, rlen);
+                    memcpy(tau_buf->data, (void *)(ptr + ofs), rlen);
                     memcpy(tau_buf->data + rlen, data, data_len);
 
                     if(switch_queue_trypush(asr_ctx->q_audio, tau_buf) != SWITCH_STATUS_SUCCESS) {
@@ -561,9 +572,7 @@ static void asr_text_param(switch_asr_handle_t *ah, char *param, const char *val
 
     assert(asr_ctx != NULL);
 
-    if(strcasecmp(param, "vad") == 0) {
-        if(val) asr_ctx->fl_vad_enabled = switch_true(val);
-    } else if(strcasecmp(param, "lang") == 0) {
+    if(strcasecmp(param, "lang") == 0) {
         if(val) asr_ctx->lang = switch_core_strdup(ah->memory_pool, gcp_get_language(val));
     } else if(!strcasecmp(param, "speech-model")) {
         if(val) asr_ctx->opt_speech_model = switch_core_strdup(ah->memory_pool, val);
@@ -639,8 +648,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
                 if(val) globals.vad_voice_ms = atoi (val);
             } else if(!strcasecmp(var, "vad-threshold")) {
                 if(val) globals.vad_threshold = atoi (val);
-            } else if(!strcasecmp(var, "vad-enable")) {
-                if(val) globals.fl_vad_enabled = switch_true(val);
             } else if(!strcasecmp(var, "vad-debug")) {
                 if(val) globals.fl_vad_debug = switch_true(val);
             } else if(!strcasecmp(var, "api-key")) {
@@ -657,8 +664,10 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
                 if(val) globals.default_lang = switch_core_strdup(pool, gcp_get_language(val));
             } else if(!strcasecmp(var, "encoding")) {
                 if(val) globals.opt_encoding = switch_core_strdup(pool, gcp_get_encoding(val));
-            } else if(!strcasecmp(var, "chunk-time-sec")) {
-                if(val) globals.chunk_time_sec = atoi(val);
+            } else if(!strcasecmp(var, "sentence-max-sec")) {
+                if(val) globals.sentence_max_sec = atoi(val);
+            } else if(!strcasecmp(var, "sentence-threshold-sec")) {
+                if(val) globals.sentence_threshold_sec = atoi(val);
             } else if(!strcasecmp(var, "request-timeout")) {
                 if(val) globals.request_timeout = atoi(val);
             } else if(!strcasecmp(var, "connect-timeout")) {
@@ -705,7 +714,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
         globals.api_url_ep = strdup(globals.api_key);
     }
 
-    globals.chunk_time_sec = globals.chunk_time_sec > DEF_CHUNK_TIME_SEC ? globals.chunk_time_sec : DEF_CHUNK_TIME_SEC;
+    globals.sentence_max_sec = globals.sentence_max_sec > DEF_SENTENCE_MAX_TIME ? globals.sentence_max_sec : DEF_SENTENCE_MAX_TIME;
     globals.opt_encoding = globals.opt_encoding ? globals.opt_encoding : gcp_get_encoding("l16");
     globals.opt_speech_model = globals.opt_speech_model ?  globals.opt_speech_model : "phone_call";
     globals.opt_max_alternatives = globals.opt_max_alternatives > 0 ? globals.opt_max_alternatives : 1;
@@ -713,8 +722,12 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
     globals.opt_meta_recording_device_type = globals.opt_meta_recording_device_type ? globals.opt_meta_recording_device_type : gcp_get_recording_device("unspecified");
     globals.opt_meta_interaction_type = globals.opt_meta_interaction_type ? globals.opt_meta_interaction_type : gcp_get_interaction("unspecified");
 
-    *module_interface = switch_loadable_module_create_module_interface(pool, modname);
+    globals.tmp_path = switch_core_sprintf(pool, "%s%sgoogle-asr-cache", SWITCH_GLOBAL_dirs.temp_dir, SWITCH_PATH_SEPARATOR);
+    if(switch_directory_exists(globals.tmp_path, NULL) != SWITCH_STATUS_SUCCESS) {
+        switch_dir_make(globals.tmp_path, SWITCH_FPROT_OS_DEFAULT, NULL);
+    }
 
+    *module_interface = switch_loadable_module_create_module_interface(pool, modname);
     asr_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_ASR_INTERFACE);
     asr_interface->interface_name = "google";
     asr_interface->asr_open = asr_open;
