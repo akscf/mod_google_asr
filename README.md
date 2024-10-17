@@ -1,5 +1,5 @@
 <p>
-  Freeswitch ASR module for the Google cloud Speech-to-Text service, based on v1-rest api with VAD. <br>
+  Provides the ability to use Google Speech-To-Text service in the Freeswitch <br>
 </p>
 
 ### Usage example

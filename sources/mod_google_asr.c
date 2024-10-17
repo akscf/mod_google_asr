@@ -18,10 +18,11 @@
  *  Konstantin Alexandrin <akscfx@gmail.com>
  *
  *
- * mod_google_asr.c -- google speech-to-text service interface
- *
- * Provides Google STT service for the Freeswitch.
+ * Provides the ability to use Google Speech-To-Text service in the Freeswitch.
  * https://cloud.google.com/speech-to-text/docs/reference/rest
+ *
+ * Development repository:
+ * https://github.com/akscf/mod_google_asr
  *
  */
 #include "mod_google_asr.h"
