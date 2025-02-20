@@ -1,5 +1,5 @@
 <p>
-  Provides the ability to use Google Speech-To-Text service in the Freeswitch <br>
+  Google Speech-To-Text service for the Freeswitch. <br>
 </p>
 
 ### Usage example
@@ -17,3 +17,13 @@
 </extension>
 
 ```
+
+### mod_quickjs example
+```javascript
+session.ttsEngine= 'google';
+session.asrEngine= 'google';
+
+var txt = session.sayAndDetectSpeech('Hello, how can I help you?', 10);
+consoleLog('info', "TEXT: " + txt);
+```
+

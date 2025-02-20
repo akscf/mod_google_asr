@@ -18,7 +18,7 @@
  *  Konstantin Alexandrin <akscfx@gmail.com>
  *
  *
- * Provides the ability to use Google Speech-To-Text service in the Freeswitch.
+ * Google Speech-To-Text service for the Freeswitch.
  * https://cloud.google.com/speech-to-text/docs/reference/rest
  *
  * Development repository:
@@ -176,16 +176,16 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
                                     if(jelem) {
                                         cJSON *jt = cJSON_GetObjectItem(jelem, "transcript");
                                         if(jt && jt->valuestring) {
-                                            xdata_buffer_t *tbuff = NULL;
-                                            if(xdata_buffer_alloc(&tbuff, (switch_byte_t*)jt->valuestring, strlen(jt->valuestring)) == SWITCH_STATUS_SUCCESS) {
-                                                if(switch_queue_trypush(asr_ctx->q_text, tbuff) == SWITCH_STATUS_SUCCESS) {
+                                            char  *txt = strdup(jt->valuestring);
+                                            if(txt) {
+                                                if(switch_queue_trypush(asr_ctx->q_text, txt) == SWITCH_STATUS_SUCCESS) {
                                                     switch_mutex_lock(asr_ctx->mutex);
                                                     asr_ctx->transcription_results++;
                                                     switch_mutex_unlock(asr_ctx->mutex);
-
                                                     status = SWITCH_STATUS_SUCCESS;
                                                 } else {
-                                                    xdata_buffer_free(&tbuff);
+                                                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Queue is full!\n");
+                                                    switch_safe_free(txt);
                                                 }
                                             }
                                         }
@@ -193,19 +193,15 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
                                 }
                             }
                         } else { /* empty result */
-                            const char *str = "";
-                            xdata_buffer_t *tbuff = NULL;
-
-                            if(xdata_buffer_alloc(&tbuff, (switch_byte_t *)str, strlen(str)) == SWITCH_STATUS_SUCCESS) {
-                                if(switch_queue_trypush(asr_ctx->q_text, tbuff) == SWITCH_STATUS_SUCCESS) {
-                                    switch_mutex_lock(asr_ctx->mutex);
-                                    asr_ctx->transcription_results++;
-                                    switch_mutex_unlock(asr_ctx->mutex);
-
-                                    status = SWITCH_STATUS_SUCCESS;
-                                } else {
-                                    xdata_buffer_free(&tbuff);
-                                }
+                            char *txt = strdup("");
+                            if(switch_queue_trypush(asr_ctx->q_text, txt) == SWITCH_STATUS_SUCCESS) {
+                                switch_mutex_lock(asr_ctx->mutex);
+                                asr_ctx->transcription_results++;
+                                switch_mutex_unlock(asr_ctx->mutex);
+                                status = SWITCH_STATUS_SUCCESS;
+                            } else {
+                                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Queue is full!\n");
+                                switch_safe_free(txt);
                             }
                         }
                     }
@@ -369,7 +365,7 @@ static switch_status_t asr_close(switch_asr_handle_t *ah, switch_asr_flag_t *fla
         switch_queue_term(asr_ctx->q_audio);
     }
     if(asr_ctx->q_text) {
-        xdata_buffer_queue_clean(asr_ctx->q_text);
+        text_queue_clean(asr_ctx->q_text);
         switch_queue_term(asr_ctx->q_text);
     }
     if(asr_ctx->vad) {
@@ -506,40 +502,58 @@ static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned in
 
 static switch_status_t asr_check_results(switch_asr_handle_t *ah, switch_asr_flag_t *flags) {
     gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+
     assert(asr_ctx != NULL);
+
+    if(asr_ctx->input_expiry > 0 && asr_ctx->input_expiry <= switch_epoch_time_now(NULL)) {
+        return SWITCH_STATUS_SUCCESS;
+    }
 
     return (asr_ctx->transcription_results > 0 ? SWITCH_STATUS_SUCCESS : SWITCH_STATUS_FALSE);
 }
 
 static switch_status_t asr_get_results(switch_asr_handle_t *ah, char **xmlstr, switch_asr_flag_t *flags) {
     gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
-    char *result = NULL;
+    switch_status_t status = SWITCH_STATUS_FALSE;
     void *pop = NULL;
 
     assert(asr_ctx != NULL);
 
-    if(switch_queue_trypop(asr_ctx->q_text, &pop) == SWITCH_STATUS_SUCCESS) {
-        xdata_buffer_t *tbuff = (xdata_buffer_t *)pop;
+    if(asr_ctx->input_expiry > 0 && asr_ctx->input_expiry <= switch_epoch_time_now(NULL)) {
+#ifdef MOD_GOOGLE_ASR_DEBUG
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Input timeout\n");
+#endif
 
-        if(tbuff->len > 0) {
-            switch_zmalloc(result, tbuff->len + 1);
-            memcpy(result, tbuff->data, tbuff->len);
-        }
-        xdata_buffer_free(&tbuff);
-
-        switch_mutex_lock(asr_ctx->mutex);
-        if(asr_ctx->transcription_results > 0) asr_ctx->transcription_results--;
-        switch_mutex_unlock(asr_ctx->mutex);
+        *xmlstr = NULL;
+        return SWITCH_STATUS_TIMEOUT;
     }
 
-    *xmlstr = result;
-    return (result ? SWITCH_STATUS_SUCCESS : SWITCH_STATUS_FALSE);
+    if(switch_queue_trypop(asr_ctx->q_text, &pop) == SWITCH_STATUS_SUCCESS) {
+        if(pop) {
+#ifdef MOD_GOOGLE_ASR_DEBUG
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Return text [%s]\n", pop ? (char *)pop : "null");
+#endif
+
+            *xmlstr = (char *)pop;
+            status = SWITCH_STATUS_SUCCESS;
+
+            switch_mutex_lock(asr_ctx->mutex);
+            if(asr_ctx->transcription_results > 0) asr_ctx->transcription_results--;
+            switch_mutex_unlock(asr_ctx->mutex);
+        }
+    }
+
+    return status;
 }
 
 static switch_status_t asr_start_input_timers(switch_asr_handle_t *ah) {
     gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
 
     assert(asr_ctx != NULL);
+
+    if(asr_ctx->input_timeout > 0) {
+        asr_ctx->input_expiry = asr_ctx->input_timeout + switch_epoch_time_now(NULL);
+    }
 
     return SWITCH_STATUS_SUCCESS;
 }
@@ -575,6 +589,8 @@ static void asr_text_param(switch_asr_handle_t *ah, char *param, const char *val
 
     if(strcasecmp(param, "lang") == 0) {
         if(val) asr_ctx->lang = switch_core_strdup(ah->memory_pool, gcp_get_language(val));
+    } else if(strcasecmp(param, "timeout") == 0) {
+        if(val) asr_ctx->input_timeout = atoi(val);
     } else if(!strcasecmp(param, "speech-model")) {
         if(val) asr_ctx->opt_speech_model = switch_core_strdup(ah->memory_pool, val);
     } else if(!strcasecmp(param, "use-enhanced-model")) {
