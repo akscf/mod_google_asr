@@ -18,7 +18,7 @@
 
 ```
 
-### mod_quickjs example
+### mod_quickjs
 ```javascript
 session.ttsEngine= 'google';
 session.asrEngine= 'google';
