@@ -444,6 +444,8 @@ static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned in
     }
 
     if(fl_has_audio) {
+        asr_ctx->input_expiry = 0;
+
         if(vad_state == SWITCH_VAD_STATE_START_TALKING && asr_ctx->vad_stored_frames > 0) {
             xdata_buffer_t *tau_buf = NULL;
             const void *ptr = NULL;
