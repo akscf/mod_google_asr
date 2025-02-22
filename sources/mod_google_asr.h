@@ -55,7 +55,6 @@ typedef struct {
     uint8_t                 fl_vad_debug;
     uint8_t                 fl_shutdown;
     char                    *tmp_path;
-    char                    *api_url_ep;
     char                    *api_key;
     char                    *api_url;
     char                    *user_agent;

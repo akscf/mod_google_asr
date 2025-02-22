@@ -294,6 +294,7 @@ static switch_status_t asr_open(switch_asr_handle_t *ah, const char *codec, int 
     asr_ctx->samplerate = samplerate;
     asr_ctx->silence_sec = globals.sentence_silence_sec;
     asr_ctx->lang = (char *)globals.default_lang;
+    asr_ctx->api_key = globals.api_key;
 
     asr_ctx->opt_max_alternatives = globals.opt_max_alternatives;
     asr_ctx->opt_enable_profanity_filter = globals.opt_enable_profanity_filter;
@@ -611,7 +612,6 @@ static void asr_text_param(switch_asr_handle_t *ah, char *param, const char *val
         if(val) asr_ctx->silence_sec = atoi(val);
     } else if(strcasecmp(param, "key") == 0) {
         if(val) asr_ctx->api_key = switch_core_strdup(ah->memory_pool, val);
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "not yet implemented (custom api-key)\n");
     } else if(strcasecmp(param, "keep-tmp") == 0) {
         if(val) asr_ctx->fl_keep_tmp = switch_true(val);
     } else if(strcasecmp(param, "tmp-name") == 0) {
@@ -776,15 +776,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Missing required parameter: api-url\n");
         switch_goto_status(SWITCH_STATUS_GENERR, out);
     }
-    if(!globals.api_key) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Missing required parameter: api-key\n");
-        switch_goto_status(SWITCH_STATUS_GENERR, out);
-    }
-
-    globals.api_url_ep = switch_string_replace(globals.api_url, "${api-key}", globals.api_key);
-    if(!globals.api_url_ep) {
-        globals.api_url_ep = strdup(globals.api_key);
-    }
 
     globals.sentence_max_sec = !globals.sentence_max_sec ? DEF_SENTENCE_MAX_TIME : globals.sentence_max_sec;
     globals.sentence_silence_sec = !globals.sentence_silence_sec ? DEF_SENTENCE_SILENCE : globals.sentence_silence_sec;
@@ -845,8 +836,6 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_google_asr_shutdown) {
             switch_yield(100000);
         }
     }
-
-    switch_safe_free(globals.api_url_ep);
 
     return SWITCH_STATUS_SUCCESS;
 }

@@ -50,8 +50,15 @@ switch_status_t curl_perform(asr_ctx_t *asr_ctx, globals_t *globals) {
     switch_status_t status = SWITCH_STATUS_SUCCESS;
     CURL *curl_handle = NULL;
     switch_curl_slist_t *headers = NULL;
+    char *epurl = NULL;
     switch_CURLcode curl_ret = 0;
     long http_resp = 0;
+
+    if(asr_ctx->api_key) {
+        epurl = switch_string_replace(globals->api_url, "${api-key}", asr_ctx->api_key);
+    } else {
+        epurl = strdup(globals->api_url);
+    }
 
     curl_handle = switch_curl_easy_init();
     headers = switch_curl_slist_append(headers, "Content-Type: application/json; charset=utf-8");
@@ -73,7 +80,7 @@ switch_status_t curl_perform(asr_ctx_t *asr_ctx, globals_t *globals) {
     if(globals->user_agent) {
         switch_curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, globals->user_agent);
     }
-    if(strncasecmp(globals->api_url_ep, "https", 5) == 0) {
+    if(strncasecmp(epurl, "https", 5) == 0) {
         switch_curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0);
         switch_curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 0);
     }
@@ -88,7 +95,7 @@ switch_status_t curl_perform(asr_ctx_t *asr_ctx, globals_t *globals) {
         switch_curl_easy_setopt(curl_handle, CURLOPT_PROXY, globals->proxy);
     }
 
-    switch_curl_easy_setopt(curl_handle, CURLOPT_URL, globals->api_url_ep);
+    switch_curl_easy_setopt(curl_handle, CURLOPT_URL, epurl);
 
     curl_ret = switch_curl_easy_perform(curl_handle);
     if(!curl_ret) {
@@ -117,5 +124,6 @@ switch_status_t curl_perform(asr_ctx_t *asr_ctx, globals_t *globals) {
         switch_curl_slist_free_all(headers);
     }
 
+    switch_safe_free(epurl);
     return status;
 }
