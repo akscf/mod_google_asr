@@ -22,7 +22,7 @@
 #include "mod_google_asr.h"
 
 static size_t curl_io_write_callback(char *buffer, size_t size, size_t nitems, void *user_data) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)user_data;
+    asr_ctx_t *asr_ctx = (asr_ctx_t *)user_data;
     size_t len = (size * nitems);
 
     if(len > 0 && asr_ctx->curl_recv_buffer_ref) {
@@ -33,7 +33,7 @@ static size_t curl_io_write_callback(char *buffer, size_t size, size_t nitems, v
 }
 
 static size_t curl_io_read_callback(char *buffer, size_t size, size_t nitems, void *user_data) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)user_data;
+    asr_ctx_t *asr_ctx = (asr_ctx_t *)user_data;
     size_t nmax = (size * nitems);
     size_t ncur = (asr_ctx->curl_send_buffer_len > nmax) ? nmax : asr_ctx->curl_send_buffer_len;
 
@@ -46,7 +46,7 @@ static size_t curl_io_read_callback(char *buffer, size_t size, size_t nitems, vo
     return ncur;
 }
 
-switch_status_t curl_perform(gasr_ctx_t *asr_ctx, globals_t *globals) {
+switch_status_t curl_perform(asr_ctx_t *asr_ctx, globals_t *globals) {
     switch_status_t status = SWITCH_STATUS_SUCCESS;
     CURL *curl_handle = NULL;
     switch_curl_slist_t *headers = NULL;

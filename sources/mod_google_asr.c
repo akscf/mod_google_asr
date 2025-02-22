@@ -27,7 +27,7 @@
  */
 #include "mod_google_asr.h"
 
-static globals_t globals;
+globals_t globals;
 
 SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load);
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_google_asr_shutdown);
@@ -35,8 +35,8 @@ SWITCH_MODULE_DEFINITION(mod_google_asr, mod_google_asr_load, mod_google_asr_shu
 
 
 static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void *obj) {
-    volatile gasr_ctx_t *_ref = (gasr_ctx_t *)obj;
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)_ref;
+    volatile asr_ctx_t *_ref = (asr_ctx_t *)obj;
+    asr_ctx_t *asr_ctx = (asr_ctx_t *)_ref;
     switch_status_t status;
     switch_byte_t *base64_buffer = NULL;
     switch_byte_t *curl_send_buffer = NULL;
@@ -104,10 +104,14 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
 
         if(fl_cbuff_overflow) {
             sentence_timeout = 1;
-        }
-        if(schunks && asr_ctx->vad_state == SWITCH_VAD_STATE_STOP_TALKING) {
-            if(!sentence_timeout) {
-                sentence_timeout = asr_ctx->silence_sec + switch_epoch_time_now(NULL);
+        } else {
+            if(schunks && asr_ctx->vad_state == SWITCH_VAD_STATE_STOP_TALKING) {
+                if(!sentence_timeout) {
+                    sentence_timeout = asr_ctx->silence_sec + switch_epoch_time_now(NULL);
+                }
+            }
+            if(sentence_timeout && (asr_ctx->vad_state == SWITCH_VAD_STATE_START_TALKING || asr_ctx->vad_state == SWITCH_VAD_STATE_TALKING)) {
+                sentence_timeout = 0;
             }
         }
 
@@ -115,6 +119,11 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
             const void *chunk_buffer_ptr = NULL;
             uint32_t buf_len = switch_buffer_peek_zerocopy(chunk_buffer, &chunk_buffer_ptr);
             uint32_t b64_len = BASE64_ENC_SZ(buf_len) + 1;
+            char *chunk_fname = NULL;
+
+            if(asr_ctx->alt_tmp_name) {
+                chunk_fname = chunk_write((switch_byte_t *)chunk_buffer_ptr, buf_len, asr_ctx->channels, asr_ctx->samplerate, asr_ctx->alt_tmp_name);
+            }
 
             if(base64_buffer_size == 0 || base64_buffer_size < b64_len) {
                 if(base64_buffer_size > 0) { switch_safe_free(base64_buffer); }
@@ -224,6 +233,8 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
 
             schunks = 0;
             sentence_timeout = 0;
+            if(chunk_fname && !asr_ctx->fl_keep_tmp) unlink(chunk_fname);
+            switch_safe_free(chunk_fname);
             switch_buffer_zero(chunk_buffer);
         }
 
@@ -266,14 +277,14 @@ static switch_status_t asr_open(switch_asr_handle_t *ah, const char *codec, int 
     switch_status_t status = SWITCH_STATUS_SUCCESS;
     switch_threadattr_t *attr = NULL;
     switch_thread_t *thread = NULL;
-    gasr_ctx_t *asr_ctx = NULL;
+    asr_ctx_t *asr_ctx = NULL;
 
     if(strcmp(codec, "L16") !=0) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unsupported encoding: %s\n", codec);
         switch_goto_status(SWITCH_STATUS_FALSE, out);
     }
 
-    if((asr_ctx = switch_core_alloc(ah->memory_pool, sizeof(gasr_ctx_t))) == NULL) {
+    if((asr_ctx = switch_core_alloc(ah->memory_pool, sizeof(asr_ctx_t))) == NULL) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_core_alloc()\n");
         switch_goto_status(SWITCH_STATUS_GENERR, out);
     }
@@ -340,7 +351,7 @@ out:
 }
 
 static switch_status_t asr_close(switch_asr_handle_t *ah, switch_asr_flag_t *flags) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+    asr_ctx_t *asr_ctx = (asr_ctx_t *)ah->private_info;
     uint8_t fl_wloop = SWITCH_TRUE;
 
     assert(asr_ctx != NULL);
@@ -384,7 +395,7 @@ static switch_status_t asr_close(switch_asr_handle_t *ah, switch_asr_flag_t *fla
 }
 
 static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned int data_len, switch_asr_flag_t *flags) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+    asr_ctx_t *asr_ctx = (asr_ctx_t *)ah->private_info;
     switch_vad_state_t vad_state = 0;
     uint8_t fl_has_audio = SWITCH_FALSE;
 
@@ -446,7 +457,7 @@ static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned in
     }
 
     if(fl_has_audio) {
-        asr_ctx->input_expiry = 0;
+        asr_ctx->speech_start_expiry = 0;
 
         if(vad_state == SWITCH_VAD_STATE_START_TALKING && asr_ctx->vad_stored_frames > 0) {
             xdata_buffer_t *tau_buf = NULL;
@@ -505,7 +516,7 @@ static switch_status_t asr_feed(switch_asr_handle_t *ah, void *data, unsigned in
 }
 
 static switch_status_t asr_check_results(switch_asr_handle_t *ah, switch_asr_flag_t *flags) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+    asr_ctx_t *asr_ctx = (asr_ctx_t *)ah->private_info;
 
     assert(asr_ctx != NULL);
 
@@ -513,7 +524,7 @@ static switch_status_t asr_check_results(switch_asr_handle_t *ah, switch_asr_fla
         return SWITCH_STATUS_FALSE;
     }
 
-    if(asr_ctx->input_expiry && asr_ctx->input_expiry <= switch_epoch_time_now(NULL)) {
+    if(asr_ctx->speech_start_expiry && asr_ctx->speech_start_expiry <= switch_epoch_time_now(NULL)) {
         return SWITCH_STATUS_SUCCESS;
     }
 
@@ -521,18 +532,18 @@ static switch_status_t asr_check_results(switch_asr_handle_t *ah, switch_asr_fla
 }
 
 static switch_status_t asr_get_results(switch_asr_handle_t *ah, char **xmlstr, switch_asr_flag_t *flags) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+    asr_ctx_t *asr_ctx = (asr_ctx_t *)ah->private_info;
     switch_status_t status = SWITCH_STATUS_FALSE;
     void *pop = NULL;
 
     assert(asr_ctx != NULL);
 
-    if(asr_ctx->input_expiry && asr_ctx->input_expiry <= switch_epoch_time_now(NULL)) {
+    if(asr_ctx->speech_start_expiry && asr_ctx->speech_start_expiry <= switch_epoch_time_now(NULL)) {
 #ifdef MOD_GOOGLE_ASR_DEBUG
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Input timeout\n");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Speech start timeout\n");
 #endif
 
-        *xmlstr = strdup("[input timeout]");
+        *xmlstr = strdup("[speech start timeout]");
         return SWITCH_STATUS_SUCCESS;
     }
 
@@ -555,49 +566,56 @@ static switch_status_t asr_get_results(switch_asr_handle_t *ah, char **xmlstr, s
 }
 
 static switch_status_t asr_start_input_timers(switch_asr_handle_t *ah) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+    asr_ctx_t *asr_ctx = (asr_ctx_t *)ah->private_info;
 
     assert(asr_ctx != NULL);
 
-    asr_ctx->input_expiry = asr_ctx->input_timeout ? asr_ctx->input_timeout + switch_epoch_time_now(NULL) : 0;
+    asr_ctx->speech_start_expiry = asr_ctx->speech_start_timeout ? asr_ctx->speech_start_timeout + switch_epoch_time_now(NULL) : 0;
     asr_ctx->fl_start_timers = SWITCH_TRUE;
 
     return SWITCH_STATUS_SUCCESS;
 }
 
 static switch_status_t asr_pause(switch_asr_handle_t *ah) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+    asr_ctx_t *asr_ctx = (asr_ctx_t *)ah->private_info;
 
     assert(asr_ctx != NULL);
 
-    asr_ctx->input_expiry = 0;
+    asr_ctx->speech_start_expiry = 0;
     asr_ctx->fl_pause = SWITCH_TRUE;
 
     return SWITCH_STATUS_SUCCESS;
 }
 
 static switch_status_t asr_resume(switch_asr_handle_t *ah) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+    asr_ctx_t *asr_ctx = (asr_ctx_t *)ah->private_info;
 
     assert(asr_ctx != NULL);
 
-    asr_ctx->input_expiry = 0;
+    asr_ctx->speech_start_expiry = 0;
     asr_ctx->fl_pause = SWITCH_FALSE;
 
     return SWITCH_STATUS_SUCCESS;
 }
 
 static void asr_text_param(switch_asr_handle_t *ah, char *param, const char *val) {
-    gasr_ctx_t *asr_ctx = (gasr_ctx_t *)ah->private_info;
+    asr_ctx_t *asr_ctx = (asr_ctx_t *)ah->private_info;
 
     assert(asr_ctx != NULL);
 
     if(strcasecmp(param, "lang") == 0) {
         if(val) asr_ctx->lang = switch_core_strdup(ah->memory_pool, gcp_get_language(val));
     } else if(strcasecmp(param, "timeout") == 0) {
-        if(val) asr_ctx->input_timeout = atoi(val);
+        if(val) asr_ctx->speech_start_timeout = atoi(val);
     } else if(strcasecmp(param, "silence") == 0) {
         if(val) asr_ctx->silence_sec = atoi(val);
+    } else if(strcasecmp(param, "key") == 0) {
+        if(val) asr_ctx->api_key = switch_core_strdup(ah->memory_pool, val);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "not yet implemented (custom api-key)\n");
+    } else if(strcasecmp(param, "keep-tmp") == 0) {
+        if(val) asr_ctx->fl_keep_tmp = switch_true(val);
+    } else if(strcasecmp(param, "tmp-name") == 0) {
+        if(val) asr_ctx->alt_tmp_name = switch_core_strdup(ah->memory_pool, val);
     } else if(!strcasecmp(param, "speech-model")) {
         if(val) asr_ctx->opt_speech_model = switch_core_strdup(ah->memory_pool, val);
     } else if(!strcasecmp(param, "use-enhanced-model")) {
@@ -645,7 +663,7 @@ static switch_status_t asr_unload_grammar(switch_asr_handle_t *ah, const char *n
     return SWITCH_STATUS_SUCCESS;
 }
 
-#define CMD_SYNTAX "path/to/filename.(mp3|wav) []\n"
+#define CMD_SYNTAX "path_to/filename.(mp3|wav) []\n"
 SWITCH_STANDARD_API(google_asr_cmd_handler) {
     //switch_status_t status = 0;
     char *mycmd = NULL, *argv[10] = { 0 }; int argc = 0;
@@ -777,7 +795,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
     globals.opt_meta_recording_device_type = globals.opt_meta_recording_device_type ? globals.opt_meta_recording_device_type : gcp_get_recording_device("unspecified");
     globals.opt_meta_interaction_type = globals.opt_meta_interaction_type ? globals.opt_meta_interaction_type : gcp_get_interaction("unspecified");
 
-    globals.tmp_path = switch_core_sprintf(pool, "%s%sgoogle-asr-tmp", SWITCH_GLOBAL_dirs.temp_dir, SWITCH_PATH_SEPARATOR);
+    globals.tmp_path = switch_core_sprintf(pool, "%s%sgoogle-asr-cache", SWITCH_GLOBAL_dirs.temp_dir, SWITCH_PATH_SEPARATOR);
     if(switch_directory_exists(globals.tmp_path, NULL) != SWITCH_STATUS_SUCCESS) {
         switch_dir_make(globals.tmp_path, SWITCH_FPROT_OS_DEFAULT, NULL);
     }

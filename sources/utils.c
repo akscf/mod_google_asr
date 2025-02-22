@@ -21,6 +21,8 @@
  */
 #include "mod_google_asr.h"
 
+extern globals_t globals;
+
 /**
  ** https://cloud.google.com/speech-to-text/docs/reference/rest/v1/RecognitionConfig
  ** https://cloud.google.com/speech-to-text/docs/speech-to-text-supported-languages
@@ -132,4 +134,46 @@ void text_queue_clean(switch_queue_t *queue) {
     while(switch_queue_trypop(queue, (void *)&data) == SWITCH_STATUS_SUCCESS) {
         switch_safe_free(data);
     }
+}
+
+char *chunk_write(switch_byte_t *buf, uint32_t buf_len, uint32_t channels, uint32_t samplerate, const char *alt_tmp_name) {
+    switch_status_t status = SWITCH_STATUS_FALSE;
+    switch_size_t len = (buf_len / sizeof(int16_t));
+    switch_file_handle_t fh = { 0 };
+    char *file_name = NULL;
+    char name_uuid[SWITCH_UUID_FORMATTED_LENGTH + 1] = { 0 };
+    int flags = (SWITCH_FILE_FLAG_WRITE | SWITCH_FILE_DATA_SHORT);
+
+    if(alt_tmp_name) {
+        file_name = strdup(alt_tmp_name);
+    } else {
+        switch_uuid_str((char *)name_uuid, sizeof(name_uuid));
+        file_name = switch_mprintf("%s%s%s.wav", globals.tmp_path, SWITCH_PATH_SEPARATOR, name_uuid);
+    }
+
+#ifdef MOD_GOOGLE_ASR_DEBUG
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "chunk file: [%s]\n", file_name);
+#endif
+
+    if((status = switch_core_file_open(&fh, file_name, channels, samplerate, flags, NULL)) != SWITCH_STATUS_SUCCESS) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to open file (%s)\n", file_name);
+        goto out;
+    }
+
+    if((status = switch_core_file_write(&fh, buf, &len)) != SWITCH_STATUS_SUCCESS) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to write (%s)\n", file_name);
+        goto out;
+    }
+
+    switch_core_file_close(&fh);
+out:
+    if(status != SWITCH_STATUS_SUCCESS) {
+        if(file_name) {
+            unlink(file_name);
+            switch_safe_free(file_name);
+        }
+        return NULL;
+    }
+
+    return file_name;
 }
