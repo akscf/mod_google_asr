@@ -43,7 +43,6 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
     switch_buffer_t *chunk_buffer = NULL;
     switch_buffer_t *curl_recv_buffer = NULL;
     switch_memory_pool_t *pool = NULL;
-    cJSON *json = NULL;
     time_t sentence_timeout = 0;
     uint32_t base64_buffer_size = 0, chunk_buffer_size = 0, recv_len = 0;
     uint32_t schunks = 0;
@@ -121,8 +120,8 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
             uint32_t b64_len = BASE64_ENC_SZ(buf_len) + 1;
             char *chunk_fname = NULL;
 
-            if(asr_ctx->alt_tmp_name) {
-                chunk_fname = chunk_write((switch_byte_t *)chunk_buffer_ptr, buf_len, asr_ctx->channels, asr_ctx->samplerate, asr_ctx->alt_tmp_name);
+            if(asr_ctx->fl_keep_tmp) {
+                chunk_fname = chunk_write((switch_byte_t *)chunk_buffer_ptr, buf_len, asr_ctx->channels, asr_ctx->samplerate);
             }
 
             if(base64_buffer_size == 0 || base64_buffer_size < b64_len) {
@@ -172,58 +171,40 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
                 recv_len = switch_buffer_peek_zerocopy(curl_recv_buffer, &curl_recv_buffer_ptr);
 
                 if(status == SWITCH_STATUS_SUCCESS) {
-                    status = SWITCH_STATUS_FALSE;
-
-                    if((json = cJSON_Parse((char *)curl_recv_buffer_ptr)) != NULL) {
-                        cJSON *jres = cJSON_GetObjectItem(json, "results");
-                        if(jres && cJSON_GetArraySize(jres) > 0) {
-                            cJSON *jelem = cJSON_GetArrayItem(jres, 0);
-                            if(jelem) {
-                                jres = cJSON_GetObjectItem(jelem, "alternatives");
-                                if(jres && cJSON_GetArraySize(jres) > 0) {
-                                    jelem = cJSON_GetArrayItem(jres, 0);
-                                    if(jelem) {
-                                        cJSON *jt = cJSON_GetObjectItem(jelem, "transcript");
-                                        if(jt && jt->valuestring) {
-                                            char  *txt = strdup(jt->valuestring);
-                                            if(txt) {
-                                                if(switch_queue_trypush(asr_ctx->q_text, txt) == SWITCH_STATUS_SUCCESS) {
-                                                    switch_mutex_lock(asr_ctx->mutex);
-                                                    asr_ctx->transcription_results++;
-                                                    switch_mutex_unlock(asr_ctx->mutex);
-                                                    status = SWITCH_STATUS_SUCCESS;
-                                                } else {
-                                                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Queue is full!\n");
-                                                    switch_safe_free(txt);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                    if(curl_recv_buffer_ptr && recv_len) {
+                        char *txt = parse_response((char *)curl_recv_buffer_ptr, NULL);
+#ifdef MOD_GOOGLE_ASR_DEBUG
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Service response [%s]\n", (char *)curl_recv_buffer_ptr);
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Text [%s]\n", txt ? txt : "null");
+#endif
+                        if(asr_ctx->fl_js_out) {
+                            char *json = switch_mprintf("{\"chunks\":%d, \"duration\":%d, \"file\":\"%s\", \"text\":\"%s\"}", schunks, (uint32_t)(buf_len / asr_ctx->samplerate), chunk_fname, txt ? txt : "");
+                            if(switch_queue_trypush(asr_ctx->q_text, json) == SWITCH_STATUS_SUCCESS) {
+                                switch_mutex_lock(asr_ctx->mutex);
+                                asr_ctx->transcription_results++;
+                                switch_mutex_unlock(asr_ctx->mutex);
+                            } else {
+                                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Queue is full!\n");
+                                switch_safe_free(json);
                             }
-                        } else { /* empty result */
-                            char *txt = strdup("");
+                            switch_safe_free(txt);
+                        } else {
+                            if(!txt) txt = strdup("");
                             if(switch_queue_trypush(asr_ctx->q_text, txt) == SWITCH_STATUS_SUCCESS) {
                                 switch_mutex_lock(asr_ctx->mutex);
                                 asr_ctx->transcription_results++;
                                 switch_mutex_unlock(asr_ctx->mutex);
-                                status = SWITCH_STATUS_SUCCESS;
                             } else {
                                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Queue is full!\n");
                                 switch_safe_free(txt);
                             }
                         }
-                    }
-                    if(json) {
-                        cJSON_Delete(json);
-                        json = NULL;
-                    }
-                    if(status != SWITCH_STATUS_SUCCESS) {
-                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to parse response: %s\n", (char *)curl_recv_buffer_ptr);
+                    } else {
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Empty service response!\n");
                     }
                 } else {
                     if(recv_len > 0) {
-                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Services response: %s\n", (char *)curl_recv_buffer_ptr);
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Service response: %s\n", (char *)curl_recv_buffer_ptr);
                     }
                 }
                 switch_safe_free(curl_send_buffer);
@@ -233,7 +214,7 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
 
             schunks = 0;
             sentence_timeout = 0;
-            if(chunk_fname && !asr_ctx->fl_keep_tmp) unlink(chunk_fname);
+            if(!asr_ctx->fl_keep_tmp && chunk_fname) unlink(chunk_fname);
             switch_safe_free(chunk_fname);
             switch_buffer_zero(chunk_buffer);
         }
@@ -246,9 +227,6 @@ out:
     switch_safe_free(base64_buffer);
     switch_safe_free(curl_send_buffer);
 
-    if(json != NULL) {
-        cJSON_Delete(json);
-    }
     if(curl_recv_buffer) {
         switch_buffer_destroy(&curl_recv_buffer);
     }
@@ -614,8 +592,10 @@ static void asr_text_param(switch_asr_handle_t *ah, char *param, const char *val
         if(val) asr_ctx->api_key = switch_core_strdup(ah->memory_pool, val);
     } else if(strcasecmp(param, "keep-tmp") == 0) {
         if(val) asr_ctx->fl_keep_tmp = switch_true(val);
-    } else if(strcasecmp(param, "tmp-name") == 0) {
-        if(val) asr_ctx->alt_tmp_name = switch_core_strdup(ah->memory_pool, val);
+    } else if(strcasecmp(param, "jsout") == 0) {
+        if(val) asr_ctx->fl_js_out = switch_true(val);
+    } else if(strcasecmp(param, "live") == 0) {
+        if(val) asr_ctx->fl_live_cap = switch_true(val);
     } else if(!strcasecmp(param, "speech-model")) {
         if(val) asr_ctx->opt_speech_model = switch_core_strdup(ah->memory_pool, val);
     } else if(!strcasecmp(param, "use-enhanced-model")) {

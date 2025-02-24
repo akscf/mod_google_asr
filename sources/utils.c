@@ -136,7 +136,7 @@ void text_queue_clean(switch_queue_t *queue) {
     }
 }
 
-char *chunk_write(switch_byte_t *buf, uint32_t buf_len, uint32_t channels, uint32_t samplerate, const char *alt_tmp_name) {
+char *chunk_write(switch_byte_t *buf, uint32_t buf_len, uint32_t channels, uint32_t samplerate) {
     switch_status_t status = SWITCH_STATUS_FALSE;
     switch_size_t len = (buf_len / sizeof(int16_t));
     switch_file_handle_t fh = { 0 };
@@ -144,12 +144,8 @@ char *chunk_write(switch_byte_t *buf, uint32_t buf_len, uint32_t channels, uint3
     char name_uuid[SWITCH_UUID_FORMATTED_LENGTH + 1] = { 0 };
     int flags = (SWITCH_FILE_FLAG_WRITE | SWITCH_FILE_DATA_SHORT);
 
-    if(alt_tmp_name) {
-        file_name = strdup(alt_tmp_name);
-    } else {
-        switch_uuid_str((char *)name_uuid, sizeof(name_uuid));
-        file_name = switch_mprintf("%s%s%s.wav", globals.tmp_path, SWITCH_PATH_SEPARATOR, name_uuid);
-    }
+    switch_uuid_str((char *)name_uuid, sizeof(name_uuid));
+    file_name = switch_mprintf("%s%s%s.wav", globals.tmp_path, SWITCH_PATH_SEPARATOR, name_uuid);
 
 #ifdef MOD_GOOGLE_ASR_DEBUG
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "chunk file: [%s]\n", file_name);
@@ -176,4 +172,38 @@ out:
     }
 
     return file_name;
+}
+
+char *parse_response(char *data, switch_stream_handle_t *stream) {
+    char *result = NULL;
+    cJSON *json = NULL;
+
+    if(!data) {
+        return NULL;
+    }
+
+    if((json = cJSON_Parse(data)) != NULL) {
+        cJSON *jres = cJSON_GetObjectItem(json, "results");
+        if(jres && cJSON_GetArraySize(jres) > 0) {
+            cJSON *jelem = cJSON_GetArrayItem(jres, 0);
+            if(jelem) {
+                jres = cJSON_GetObjectItem(jelem, "alternatives");
+                if(jres && cJSON_GetArraySize(jres) > 0) {
+                    jelem = cJSON_GetArrayItem(jres, 0);
+                    if(jelem) {
+                        cJSON *jt = cJSON_GetObjectItem(jelem, "transcript");
+                        if(jt && jt->valuestring) {
+                            result = strdup(jt->valuestring);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if(json) {
+        cJSON_Delete(json);
+    }
+
+    return result;
 }

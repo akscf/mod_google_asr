@@ -32,7 +32,7 @@
 
 #define MOD_CONFIG_NAME         "google_asr.conf"
 #define MOD_VERSION             "1.0.4"
-#define QUEUE_SIZE              64
+#define QUEUE_SIZE              1024
 #define VAD_STORE_FRAMES        64
 #define VAD_RECOVERY_FRAMES     20
 #define DEF_SENTENCE_MAX_TIME   25
@@ -87,7 +87,6 @@ typedef struct {
     switch_buffer_t         *curl_recv_buffer_ref;
     switch_byte_t           *curl_send_buffer_ref;
     char                    *api_key;
-    char                    *alt_tmp_name;
     char                    *lang;
     switch_vad_state_t      vad_state;
     uint32_t                curl_send_buffer_len;
@@ -108,6 +107,8 @@ typedef struct {
     uint8_t                 fl_destroyed;
     uint8_t                 fl_abort;
     uint8_t                 fl_keep_tmp;
+    uint8_t                 fl_js_out;
+    uint8_t                 fl_live_cap;
     //
     char                    *opt_speech_model;
     char                    *opt_meta_microphone_distance;
@@ -141,7 +142,8 @@ switch_status_t xdata_buffer_alloc(xdata_buffer_t **out, switch_byte_t *data, ui
 void xdata_buffer_free(xdata_buffer_t **buf);
 void xdata_buffer_queue_clean(switch_queue_t *queue);
 void text_queue_clean(switch_queue_t *queue);
-char *chunk_write(switch_byte_t *buf, uint32_t buf_len, uint32_t channels, uint32_t samplerate, const char *alt_tmp_name);
+char *parse_response(char *data, switch_stream_handle_t *stream);
+char *chunk_write(switch_byte_t *buf, uint32_t buf_len, uint32_t channels, uint32_t samplerate);
 
 char *gcp_get_language(const char *val);
 char *gcp_get_encoding(const char *val);
