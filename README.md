@@ -1,6 +1,6 @@
 <p>
   Google Speech-To-Text service for the Freeswitch. <br>
-  Features: vad, audio keeping, flexible adjustment. <br>
+  Features: vad, flexible adjustments. <br>
   Available through: asr_interface, commnad api. <br>
 </p>
 

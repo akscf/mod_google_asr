@@ -32,11 +32,9 @@
 
 #define MOD_CONFIG_NAME         "google_asr.conf"
 #define MOD_VERSION             "1.0.4"
-#define QUEUE_SIZE              1024
+#define QUEUE_SIZE              128
 #define VAD_STORE_FRAMES        64
 #define VAD_RECOVERY_FRAMES     20
-#define DEF_SENTENCE_MAX_TIME   25
-#define DEF_SENTENCE_SILENCE    3
 #define BASE64_ENC_SZ(n)        (4*((n+2)/3))
 #define BOOL2STR(v)             (v ? "true" : "false")
 
@@ -45,8 +43,8 @@
 typedef struct {
     switch_mutex_t          *mutex;
     uint32_t                active_threads;
-    uint32_t                sentence_max_sec;
-    uint32_t                sentence_silence_sec;
+    uint32_t                speech_max_sec;
+    uint32_t                speech_silence_sec;
     uint32_t                vad_silence_ms;
     uint32_t                vad_voice_ms;
     uint32_t                vad_threshold;
@@ -98,17 +96,12 @@ typedef struct {
     uint32_t                samplerate;
     uint32_t                channels;
     uint32_t                frame_len;
-    uint32_t                speech_start_timeout;
-    uint32_t                speech_start_expiry;
     uint32_t                silence_sec;
     uint8_t                 fl_start_timers;
     uint8_t                 fl_pause;
     uint8_t                 fl_vad_first_cycle;
     uint8_t                 fl_destroyed;
     uint8_t                 fl_abort;
-    uint8_t                 fl_keep_tmp;
-    uint8_t                 fl_js_out;
-    uint8_t                 fl_live_cap;
     //
     char                    *opt_speech_model;
     char                    *opt_meta_microphone_distance;
@@ -143,7 +136,6 @@ void xdata_buffer_free(xdata_buffer_t **buf);
 void xdata_buffer_queue_clean(switch_queue_t *queue);
 void text_queue_clean(switch_queue_t *queue);
 char *parse_response(char *data, switch_stream_handle_t *stream);
-char *chunk_write(switch_byte_t *buf, uint32_t buf_len, uint32_t channels, uint32_t samplerate);
 
 char *gcp_get_language(const char *val);
 char *gcp_get_encoding(const char *val);
