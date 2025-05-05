@@ -37,7 +37,7 @@ SWITCH_MODULE_DEFINITION(mod_google_asr, mod_google_asr_load, mod_google_asr_shu
 static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void *obj) {
     volatile asr_ctx_t *_ref = (asr_ctx_t *)obj;
     asr_ctx_t *asr_ctx = (asr_ctx_t *)_ref;
-    switch_status_t status;
+    switch_status_t status = SWITCH_STATUS_FALSE;
     switch_byte_t *base64_buffer = NULL;
     switch_byte_t *curl_send_buffer = NULL;
     switch_buffer_t *chunk_buffer = NULL;
@@ -159,13 +159,16 @@ static void *SWITCH_THREAD_FUNC transcribe_thread(switch_thread_t *thread, void 
 
                 asr_ctx->curl_send_buffer_ref = curl_send_buffer;
                 asr_ctx->curl_send_buffer_len = strlen((const char *)curl_send_buffer);
-
-                switch_buffer_zero(curl_recv_buffer);
                 asr_ctx->curl_recv_buffer_ref = curl_recv_buffer;
 
-                status = curl_perform(asr_ctx, &globals);
-                recv_len = switch_buffer_peek_zerocopy(curl_recv_buffer, &curl_recv_buffer_ptr);
+                for(int rqtry = 0; rqtry < asr_ctx->retries_on_error; rqtry++) {
+                    switch_buffer_zero(curl_recv_buffer);
+                    status = curl_perform(asr_ctx, &globals);
+                    if(status == SWITCH_STATUS_SUCCESS || globals.fl_shutdown || asr_ctx->fl_destroyed) { break; }
+                    switch_yield(1000);
+                }
 
+                recv_len = switch_buffer_peek_zerocopy(curl_recv_buffer, &curl_recv_buffer_ptr);
                 if(status == SWITCH_STATUS_SUCCESS) {
                     if(curl_recv_buffer_ptr && recv_len) {
                         char *txt = parse_response((char *)curl_recv_buffer_ptr, NULL);
@@ -267,6 +270,7 @@ static switch_status_t asr_open(switch_asr_handle_t *ah, const char *codec, int 
     asr_ctx->silence_sec = globals.speech_silence_sec;
     asr_ctx->lang = (char *)globals.default_lang;
     asr_ctx->api_key = globals.api_key;
+    asr_ctx->retries_on_error = globals.retries_on_error;
 
     asr_ctx->opt_max_alternatives = globals.opt_max_alternatives;
     asr_ctx->opt_enable_profanity_filter = globals.opt_enable_profanity_filter;
@@ -688,6 +692,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
                 if(val) globals.request_timeout = atoi(val);
             } else if(!strcasecmp(var, "connect-timeout")) {
                 if(val) globals.connect_timeout = atoi(val);
+            } else if(!strcasecmp(var, "retries-on-error")) {
+                if(val) globals.retries_on_error = atoi(val);
             } else if(!strcasecmp(var, "speech-model")) {
                 if(val) globals.opt_speech_model = switch_core_strdup(pool, val);
             } else if(!strcasecmp(var, "use-enhanced-model")) {
@@ -729,6 +735,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_google_asr_load) {
     globals.opt_meta_microphone_distance = globals.opt_meta_microphone_distance ? globals.opt_meta_microphone_distance : gcp_get_microphone_distance("unspecified");
     globals.opt_meta_recording_device_type = globals.opt_meta_recording_device_type ? globals.opt_meta_recording_device_type : gcp_get_recording_device("unspecified");
     globals.opt_meta_interaction_type = globals.opt_meta_interaction_type ? globals.opt_meta_interaction_type : gcp_get_interaction("unspecified");
+    globals.retries_on_error = !globals.retries_on_error ? 1 : globals.retries_on_error;
 
     globals.tmp_path = switch_core_sprintf(pool, "%s%sgoogle-asr-cache", SWITCH_GLOBAL_dirs.temp_dir, SWITCH_PATH_SEPARATOR);
     if(switch_directory_exists(globals.tmp_path, NULL) != SWITCH_STATUS_SUCCESS) {

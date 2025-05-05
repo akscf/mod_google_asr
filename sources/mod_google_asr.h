@@ -50,6 +50,7 @@ typedef struct {
     uint32_t                vad_threshold;
     uint32_t                request_timeout; // seconds
     uint32_t                connect_timeout; // seconds
+    uint32_t                retries_on_error;
     uint8_t                 fl_vad_debug;
     uint8_t                 fl_shutdown;
     char                    *tmp_path;
@@ -87,6 +88,7 @@ typedef struct {
     char                    *api_key;
     char                    *lang;
     switch_vad_state_t      vad_state;
+    uint32_t                retries_on_error;
     uint32_t                curl_send_buffer_len;
     uint32_t                transcription_results;
     uint32_t                vad_buffer_size;
